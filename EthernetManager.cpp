@@ -4,12 +4,14 @@
 EthernetManager::EthernetManager(uint8_t sck , uint8_t miso , uint8_t mosi , uint8_t cs , uint8_t rst )
   : ethernet_CS(cs), ethernet_RST(rst) {
   SPI.begin(sck, miso, mosi, cs);
+  pinMode(RST_PIN,OUTPUT);
 }
 
 EthernetManager::EthernetManager(){
   SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
   ethernet_CS = CS_PIN;
   ethernet_RST = RST_PIN;
+  pinMode(RST_PIN,OUTPUT);
 }
 
 void EthernetManager::setIPSettings(const uint8_t* mac, bool useDHCP,
@@ -25,6 +27,11 @@ void EthernetManager::setIPSettings(const uint8_t* mac, bool useDHCP,
 }
 
 void EthernetManager::begin() {
+    // Ethernet.softReset();
+    digitalWrite(RST_PIN,LOW);
+    delay(10);
+    digitalWrite(RST_PIN,HIGH);
+    delay(10);
     Ethernet.init(ethernet_CS);
 
     if (useDHCP) {

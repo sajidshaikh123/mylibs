@@ -6,9 +6,10 @@
         #define SDA_PIN 15
         #define INPUT_INTERRUPT 7
 
+        // for Ethernet W5500
         #define SCK_PIN  22
         #define MISO_PIN 23
-        #define MOSI_PIN 2
+        #define MOSI_PIN 18
         #define CS_PIN   21
         #define RST_PIN   1
 

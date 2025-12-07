@@ -17,6 +17,7 @@ public:
     String getTopic(String request); // Construct full topic string
     void config(const char *ip, uint16_t port, const char *user, const char *password, const char *willMsg, Client &client);
     void setMacAddress(String temp_mac);
+    String getMacAddress();
     void setsubscribeto(String _sub_to);
     void begin();  // Initialize MQTT connection
     bool connect(); // Attempt to connect to MQTT broker
@@ -24,6 +25,7 @@ public:
     void setsubtopic(const DynamicJsonDocument &obj);
     void setCallback(MQTT_CALLBACK_SIGNATURE); // Set MQTT message callback function
     uint8_t connectionStatus();
+    String getMacTopic(String request);
 
 private:
     DynamicJsonDocument subtopic{300};  // inline initialization

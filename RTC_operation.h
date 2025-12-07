@@ -189,3 +189,11 @@ uint16_t getyear(){
       return(internalrtc.getYear());
     }
 }
+
+uint16_t getYear(){
+    if(RTC_OK){
+        return(RTC.getYear());
+    }else{
+      return(internalrtc.getYear());
+    }
+}

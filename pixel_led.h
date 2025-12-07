@@ -11,6 +11,9 @@ Adafruit_NeoPixel rgb_light(1,RGB_LED_PIN,NEO_GRB + NEO_KHZ800);
 #define ORANGE 0xE05800
 #define WHITE  0xFFFFFF
 #define BLACK  0x000000
+#define PURPLE 0x800080
+
+bool toggle = false;
 
 
 void setpixel(uint32_t color){
@@ -26,4 +29,25 @@ void pixelInit(){
     rgb_light.clear();
     // setpixel(GREEN);
     
+}
+
+
+void toggleLED(uint8_t conn_status){
+    if(toggle ){
+          toggle =!toggle;
+          switch(conn_status){
+              case 0: 
+                  setpixel(RED);
+                  break;
+              case 1: 
+                  setpixel(YELLOW);
+                  break;
+              case 2: 
+                  setpixel(GREEN);
+                  break;
+          }
+      }else{
+          toggle =!toggle;
+          setpixel(BLACK);
+      }
 }

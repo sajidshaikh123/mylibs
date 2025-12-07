@@ -3,7 +3,6 @@
 #include "WString.h"
 #include "FS.h"
 #include "SPIFFS.h"
-
 #include "FFat.h"
 
 
@@ -247,12 +246,12 @@ DynamicJsonDocument readJSON(fs::FS &fs,const String path ) {
 }
 
 // Read a JSON file from the SD card at the given path and return it as a DynamicJsonDocument
-bool readJSON2(fs::FS &fs,const String path,DynamicJsonDocument &json_ ) {
+bool readJSON2(fs::FS &fs,String path,DynamicJsonDocument &json_ ) {
   Serial.print("Reading File : ");
   Serial.println(path.c_str());
   // Serial.println("1234");
   // Create an error JSON to return if there is an issue with reading the file
-  // json_.clear();
+  json_.clear();
 
   // Serial.print("Opening FILE ");
   // Open the file at the given path
@@ -294,7 +293,7 @@ bool readJSON3(fs::FS &fs,const String path,DynamicJsonDocument* &jsonPtr ) {
   // Serial.println("1234");
   // Create an error JSON to return if there is an issue with reading the file
   // json_.clear();
-
+  
   // Serial.print("Opening FILE ");
   // Open the file at the given path
   File file = fs.open(path.c_str());
@@ -367,55 +366,50 @@ bool readJSON_OBJ(fs::FS &fs,const String& path ,DynamicJsonDocument *&json_) {
 }
 
 
-bool resizeJsonDocument(DynamicJsonDocument *&doc, size_t newSize) {
-  size_t json_size = 0;
-  if (doc == nullptr) {
-    // Allocate if not created yet
-    doc = new DynamicJsonDocument(newSize);
-    Serial.print("Allocated new JSON document with size: ");
-    Serial.println(newSize);
-    return true;
-  }else{
-      json_size = doc->memoryUsage();
-      Serial.print(" OLD JSON size: ");
-      Serial.println(json_size);
-  }
-
-
-  // Allocate new larger document
-  DynamicJsonDocument *newDoc = new DynamicJsonDocument(json_size + newSize);
-  if (!newDoc) {
-    Serial.println("Failed to allocate larger JSON document");
-    return false;
-  }
-
-  // Copy existing content into the new document
-  newDoc->set(*doc);
-
-  // Delete old document and replace with new one
-  delete doc;
-  doc = newDoc;
-
-  Serial.print(" Resized JSON document to: ");
-  Serial.println(newSize + json_size);
-  return true;
-}
 
 
 
 bool filesystemInit(){
-
-    // FILE_SYSTEM.format();
-    if (!FILE_SYSTEM.begin(FORMAT_FILE_SYSTEM_IF_FAILED)) {
-      Serial.println("FILE_SYSTEM Mount Failed");
-      FILE_SYSTEM.format();
-      return false;
+    Serial.println("=== FILESYSTEM INITIALIZATION ===");
+    
+    // Try to mount FFat first
+    if (!FFat.begin(true)) {
+        Serial.println("FFat mount failed - attempting format...");
+        
+        // Force format the FAT partition
+        if (!FFat.format(true)) {
+            Serial.println("ERROR: FFat format failed!");
+            
+            // Try alternative: use SPIFFS instead
+            Serial.println("Falling back to SPIFFS...");
+            if (!SPIFFS.begin(FORMAT_FILE_SYSTEM_IF_FAILED)) {
+                Serial.println("ERROR: Both FFat and SPIFFS failed!");
+                return false;
+            } else {
+                Serial.println("SPIFFS mounted successfully as fallback");
+                // Redefine FILE_SYSTEM to SPIFFS for this session
+                #undef FILE_SYSTEM
+                #define FILE_SYSTEM SPIFFS
+                return true;
+            }
+        }
+        
+        // Try to mount again after format
+        if (!FFat.begin(false)) {
+            Serial.println("ERROR: FFat mount failed even after format!");
+            return false;
+        }
     }
-
-  listDir(FILE_SYSTEM, "/", 0);
-  Serial.println(FILE_SYSTEM.totalBytes());
-  Serial.println(FILE_SYSTEM.usedBytes());
-  return true;
+    
+    Serial.println("FFat filesystem mounted successfully!");
+    
+    // Display filesystem info
+    Serial.printf("FFat Total: %.2f MB\n", FFat.totalBytes() / (1024.0 * 1024.0));
+    Serial.printf("FFat Used: %.2f MB\n", FFat.usedBytes() / (1024.0 * 1024.0));
+    Serial.printf("FFat Free: %.2f MB\n", FFat.freeBytes() / (1024.0 * 1024.0));
+    
+    listDir(FFat, "/", 0);
+    return true;
 }
 
 // Get filesystem name as string

@@ -11,28 +11,102 @@ MQTT_Lib::MQTT_Lib() : subtopic(300){
 void MQTT_Lib::setMacAddress(String temp_mac){
     macAddress = temp_mac;
 }
+String MQTT_Lib::getMacAddress(){
+    return macAddress;
+}
 // Generate full topic string based on configuration
-String MQTT_Lib::getTopic(String request) {
-    String temp_topic="";
-    if(subtopic.size() > 0){
-    temp_topic  = String((const char *)subtopic["company_name"]);
-    temp_topic += String("/");
-    temp_topic += String((const char *)subtopic["location"]);
-    temp_topic += String("/");
-    temp_topic += String((const char *)subtopic["department"]);
-    temp_topic += String("/");
-    
-    
-    if(String((const char *)subtopic["machinename"]).equals("+")){
-        temp_topic += String((const char *)subtopic["gateway"]);
-    }else{
-        temp_topic += String((const char *)subtopic["machinename"]);
-    }
-    temp_topic += String("/") + request;
-    // Serial.println(temp_topic);
+// Update the getTopic function with flexible key validation
 
-    // serializeJsonPretty(subtopic, Serial);
+String MQTT_Lib::getTopic(String request) {
+    String temp_topic = "";
+    
+    // Validate if subtopic has data
+    if (subtopic.size() == 0 || subtopic.isNull()) {
+        Serial.println("⚠ Warning: Subtopic is empty or null");
+        return temp_topic; // Return empty string
     }
+    
+    // Extract company name (handle both formats)
+    String company_name = "";
+    if (subtopic.containsKey("company_name")) {
+        company_name = String((const char *)subtopic["company_name"]);
+    } else if (subtopic.containsKey("companyname")) {
+        company_name = String((const char *)subtopic["companyname"]);
+    }
+    
+    if (company_name.length() == 0 || company_name == "null") {
+        Serial.println("⚠ Warning: company_name/companyname is empty or null");
+        return temp_topic;
+    }
+    
+    // Extract location
+    String location = "";
+    if (subtopic.containsKey("location")) {
+        location = String((const char *)subtopic["location"]);
+    }
+    
+    if (location.length() == 0 || location == "null") {
+        Serial.println("⚠ Warning: location is empty or null");
+        return temp_topic;
+    }
+    
+    // Extract department
+    String department = "";
+    if (subtopic.containsKey("department")) {
+        department = String((const char *)subtopic["department"]);
+    }
+    
+    if (department.length() == 0 || department == "null") {
+        Serial.println("⚠ Warning: department is empty or null");
+        return temp_topic;
+    }
+    
+    // Extract machine name (handle both formats)
+    String machinename = "";
+    if (subtopic.containsKey("machinename")) {
+        machinename = String((const char *)subtopic["machinename"]);
+    } else if (subtopic.containsKey("machine_name")) {
+        machinename = String((const char *)subtopic["machine_name"]);
+    }
+    
+    if (machinename.length() == 0 || machinename == "null") {
+        Serial.println("⚠ Warning: machinename/machine_name is empty or null");
+        return temp_topic;
+    }
+    
+    // Build topic string
+    temp_topic = company_name;
+    temp_topic += "/";
+    temp_topic += location;
+    temp_topic += "/";
+    temp_topic += department;
+    temp_topic += "/";
+    
+    // Handle special case for wildcard subscription
+    if (machinename.equals("+")) {
+        // Check for gateway field (both formats)
+        String gateway = "";
+        if (subtopic.containsKey("gateway")) {
+            gateway = String((const char *)subtopic["gateway"]);
+        }
+        
+        if (gateway.length() > 0 && gateway != "null") {
+            temp_topic += gateway;
+        } else {
+            temp_topic += machinename;
+        }
+    } else {
+        temp_topic += machinename;
+    }
+    
+    temp_topic += "/" + request;
+    
+    // Final validation - ensure topic is valid
+    if (temp_topic.length() == 0 || temp_topic == "/") {
+        Serial.println("⚠ Warning: Generated topic is invalid");
+        return "";
+    }
+    
     return temp_topic;
 }
 
@@ -92,7 +166,10 @@ bool MQTT_Lib::connect() {
     // Subscribe to device-specific topic
     PubSubClient::subscribe(String("devices/" + macAddress + "/+").c_str());
 
-    PubSubClient::subscribe(getTopic(sub_to).c_str());
+    if(subtopic.size() > 0 ){
+        PubSubClient::subscribe(getTopic(sub_to).c_str());
+    }
+    
     
     // Mark as connected
     status["connected"] = 1;
@@ -103,6 +180,12 @@ bool MQTT_Lib::connect() {
     return true;
 
 }
+
+String MQTT_Lib::getMacTopic(String request){
+    String temp_topic = "devices/" + macAddress + "/" + request;
+    return temp_topic;
+}
+
 
 // Handle MQTT loop operations with a 50ms interval
 void MQTT_Lib::loop() {
