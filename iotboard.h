@@ -34,10 +34,13 @@
 // ==================== LIBRARY INCLUDES ====================
 // NOTE: Libraries must be included BEFORE the namespace functions that use them
 
+#include "Print.h"
+#include "EEPROM.h"
 #include "delayTimer.h"
 #include "dwindisplay.h"
 #include "EthernetManager.h"
 #include "RTCManager.h"
+#include "RTC_operation.h"
 // #include "Filesystem.h"
 #include "FilesystemManager.h"
 #include "jsonoperation.h"
@@ -94,8 +97,88 @@ namespace IOTBoard {
 
 // Create RTCManager instance with timezone offset (0 for UTC)
 // For other timezones, use seconds offset: e.g., 19800 for IST (UTC+5:30)
+
+DelayTimer onesecloop(1000);
+DelayTimer ms_100loop(100);
+
+uint8_t conn_status = 0;
+
 RTCManager rtc(0);
 
+EthernetClient ethClient;
+EthernetManager ethManager;
 
+
+MQTT_Lib mqtt_obj;
+
+
+// Explicitly call the default constructor
+PCF8574_Output outputExpander = PCF8574_Output(OUTPUT_ADDR, SCL_PIN, SDA_PIN);
+PCF8574_Input inputExpander = PCF8574_Input(INPUT_ADDR, SCL_PIN, SDA_PIN, INPUT_INTERRUPT);
+
+extern void inputISR();
+
+void boardinit(){
+    // Initialize Ethernet
+    
+
+    // Initialize RTC
+    if(rtc.begin()){
+        Serial.println("External RTC found and initialized.");
+    } else {
+        Serial.println("External RTC not found. Using internal RTC.");
+    }
+
+    // ethManager = EthernetManager();
+    // ethManager.begin();
+
+    // Initialize PCF8574 Expanders
+    if(outputExpander.begin()){
+        Serial.println("PCF8574 Output Expander initialized.");
+    } else {
+        Serial.println("Failed to initialize PCF8574 Output Expander.");
+    }
+
+    if(inputExpander.begin()){
+        Serial.println("PCF8574 Input Expander initialized.");
+        inputExpander.attachInt(inputISR, CHANGE);
+    } else {
+        Serial.println("Failed to initialize PCF8574 Input Expander.");
+    }
+    pixelInit();
+    setpixel(RED);
+
+    EEPROM.begin(512);
+    Serial.println("EEPROM");
+
+}
+
+
+void boardloop(){
+    if(onesecloop.ontime()){
+        // Place 1-second interval tasks here
+        if (ethManager.status() == 1)
+        {
+            if (conn_status == 0)
+            {
+                conn_status = 1;
+                Serial.println(Ethernet.localIP());
+                // HMI.Write_UString(PS_INFO,Ethernet.localIP().toString().c_str()); 
+            }
+        }
+        else
+        {
+            conn_status = 0;
+        }
+    }
+
+    if(ms_100loop.ontime()){
+        // Place 100-millisecond interval tasks here
+        if (conn_status > 0)
+        {
+            mqtt_obj.loop();
+        }
+    }
+}
 
 #endif // IOTBOARD_H
