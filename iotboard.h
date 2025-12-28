@@ -55,6 +55,7 @@
 #include "usb_scanner_Lib.h"
 #include "WeighingScale.h"
 #include "WiFi_manager.h"
+#include "shift_timing.h"
 // #include "firmware_update.h"  // Moved to end because it depends on other libraries
 
 // Helper function declarations for version info
@@ -102,12 +103,16 @@ DelayTimer onesecloop(1000);
 DelayTimer ms_100loop(100);
 
 uint8_t conn_status = 0;
+uint8_t mac[6];
+String mac_str = "";
 
 RTCManager rtc(0);
 
 EthernetClient ethClient;
 EthernetManager ethManager;
 
+#define FILE_SYSTEM FFat
+FilesystemManager fsManagerFFat(FilesystemType::FFAT);
 
 MQTT_Lib mqtt_obj;
 
@@ -119,8 +124,15 @@ PCF8574_Input inputExpander = PCF8574_Input(INPUT_ADDR, SCL_PIN, SDA_PIN, INPUT_
 extern void inputISR();
 
 void boardinit(){
-    // Initialize Ethernet
-    
+    // Initialize pixel LED
+    pixelInit();
+    setpixel(RED); // Indicate initialization start
+
+    if(EEPROM.begin(512)){
+        Serial.println("EEPROM initialized.");
+    } else {
+        Serial.println("Failed to initialize EEPROM.");
+    }
 
     // Initialize RTC
     if(rtc.begin()){
@@ -145,12 +157,33 @@ void boardinit(){
     } else {
         Serial.println("Failed to initialize PCF8574 Input Expander.");
     }
-    pixelInit();
-    setpixel(RED);
+    
+    if (fsManagerFFat.init()) {
+      Serial.println("\nFileSystem: FFat initialized successfully.");
+        
+    } else {
+        Serial.println("FFat initialization failed");
+    }
 
-    EEPROM.begin(512);
-    Serial.println("EEPROM");
+    WiFi.mode(WIFI_STA);
+    delay(50);
 
+    WiFi.macAddress(mac);
+    mac_str = WiFi.macAddress();
+
+    Serial.print("MAC Address: ");
+    for (int i = 0; i < 6; i++)
+    {
+        if (mac[i] < 16)
+            Serial.print("0");
+        Serial.print(mac[i], HEX);
+        if (i < 5)
+            Serial.print(":");
+    }
+    Serial.println();
+    WiFi.disconnect();
+
+    
 }
 
 
@@ -170,6 +203,7 @@ void boardloop(){
         {
             conn_status = 0;
         }
+        toggleLED(conn_status);
     }
 
     if(ms_100loop.ontime()){

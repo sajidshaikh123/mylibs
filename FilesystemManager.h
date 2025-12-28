@@ -23,7 +23,7 @@ public:
     fs::FS* getActiveFilesystem();
     bool isFilesystemMounted();
     void listDir(String dirname, uint8_t levels = 0);
-    String listDirStr(const String &dirname);
+    String listDirStr(const String &dirname,int counter = 255);
     void createDir(const String &path);
     bool search(const String &path);
     void displayFile(const String &path);
@@ -37,9 +37,13 @@ public:
     bool readJSON(const String &path, DynamicJsonDocument &jsonDoc);
     bool readJSONOBJ(const String &path, DynamicJsonDocument *&jsonDoc);
     bool writeJSON(const String &path, const DynamicJsonDocument &jsonDoc);
+    size_t totalBytes();
+    size_t usedBytes();
+    size_t freeBytes();
 private:
     fs::FS *activeFS;
     SPIClass spi = SPIClass(HSPI); // Use the HSPI hardware peripheral
     FilesystemType currentFSType;
+    bool FS_status = false;
     bool mountFilesystem(FilesystemType fsType);
 };

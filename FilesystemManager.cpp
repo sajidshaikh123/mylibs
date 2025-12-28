@@ -36,6 +36,77 @@ bool FilesystemManager::isFilesystemMounted() {
     return activeFS != nullptr;
 }
 
+size_t FilesystemManager::totalBytes() {
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return 0;
+    }
+    
+    switch (currentFSType) {
+        case FilesystemType::FFAT:
+            return FFat.totalBytes();
+            
+        case FilesystemType::SPIFFS:
+            return SPIFFS.totalBytes();
+            
+        case FilesystemType::SD_CARD:
+            // SD card doesn't have direct totalBytes() method
+            // Return approximate value or 0
+            Serial.println("Warning: SD Card totalBytes() not available via standard API");
+            return SD.totalBytes(); // This may or may not work depending on SD library version
+            
+        default:
+            return 0;
+    }
+}
+
+size_t FilesystemManager::usedBytes() {
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return 0;
+    }
+    
+    switch (currentFSType) {
+        case FilesystemType::FFAT:
+            return FFat.usedBytes();
+            
+        case FilesystemType::SPIFFS:
+            return SPIFFS.usedBytes();
+            
+        case FilesystemType::SD_CARD:
+            // SD card doesn't have direct usedBytes() method
+            Serial.println("Warning: SD Card usedBytes() not available via standard API");
+            return SD.usedBytes(); // This may or may not work depending on SD library version
+            
+        default:
+            return 0;
+    }
+}
+
+size_t FilesystemManager::freeBytes() {
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return 0;
+    }
+    
+    switch (currentFSType) {
+        case FilesystemType::FFAT:
+            return FFat.freeBytes();
+            
+        case FilesystemType::SPIFFS:
+            // SPIFFS doesn't have freeBytes() method, calculate it
+            return SPIFFS.totalBytes() - SPIFFS.usedBytes();
+            
+        case FilesystemType::SD_CARD:
+            // SD card calculation
+            Serial.println("Warning: SD Card freeBytes() calculated from total - used");
+            return totalBytes() - usedBytes();
+            
+        default:
+            return 0;
+    }
+}
+
 bool FilesystemManager::init(FilesystemType fsType) {
     Serial.println("=== FILESYSTEM INITIALIZATION ===");
     currentFSType = fsType;
@@ -77,6 +148,7 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 Serial.printf("FFat Total: %.2f MB\n", FFat.totalBytes() / (1024.0 * 1024.0));
                 Serial.printf("FFat Used: %.2f MB\n", FFat.usedBytes() / (1024.0 * 1024.0));
                 Serial.printf("FFat Free: %.2f MB\n", FFat.freeBytes() / (1024.0 * 1024.0));
+                FS_status = true;
                 return true;
             } else {
                 Serial.println("FFat mount failed - attempting format...");
@@ -84,6 +156,7 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                     activeFS = &FFat;
                     currentFSType = FilesystemType::FFAT;
                     Serial.println("FFat formatted and mounted successfully");
+                    FS_status = true;
                     return true;
                 }
             }
@@ -96,6 +169,7 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 Serial.printf("SPIFFS Total: %.2f MB\n", SPIFFS.totalBytes() / (1024.0 * 1024.0));
                 Serial.printf("SPIFFS Used: %.2f MB\n", SPIFFS.usedBytes() / (1024.0 * 1024.0));
                 Serial.printf("SPIFFS Free: %.2f MB\n", (SPIFFS.totalBytes() - SPIFFS.usedBytes()) / (1024.0 * 1024.0));
+                FS_status = true;
                 return true;
             }
             break;
@@ -110,22 +184,25 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 Serial.println("SD Card mounted successfully");
                 // Note: SD card doesn't have totalBytes() method like SPIFFS/FFat
                 Serial.println("SD Card filesystem information not available via standard API");
+                FS_status = true;
                 return true;
             } else {
                 Serial.println("SD Card mount failed");
             }
             break;
     }
+    FS_status = false;
     return false;
 }
 
 void FilesystemManager::listDir(String dirname, uint8_t levels) {
+    
+
+    Serial.printf("Listing directory: %s\r\n", dirname.c_str());
     if (!isFilesystemMounted()) {
         Serial.println("Error: No filesystem mounted");
         return;
     }
-
-    Serial.printf("Listing directory: %s\r\n", dirname.c_str());
     File root = activeFS->open(dirname.c_str());
     if (!root) {
         Serial.println("- failed to open directory");
@@ -155,14 +232,15 @@ void FilesystemManager::listDir(String dirname, uint8_t levels) {
     }
 }
 
-String FilesystemManager::listDirStr(const String &dirname) {
+String FilesystemManager::listDirStr(const String &dirname,int counter ) {
+    
+    
+    Serial.print("Listing directory String: ");
+    Serial.println(dirname.c_str());
     if (!isFilesystemMounted()) {
         Serial.println("Error: No filesystem mounted");
         return "";
     }
-    
-    Serial.print("Listing directory: ");
-    Serial.println(dirname.c_str());
     String dirlist = "";
     File root = activeFS->open(dirname.c_str());
     if (!root || !root.isDirectory()) return "";
@@ -170,14 +248,22 @@ String FilesystemManager::listDirStr(const String &dirname) {
     while (file) {
         dirlist += String(file.name()) + String(",");
         file = root.openNextFile();
+        counter++;
+        if(counter > 10)
+            break;
     }
     if (dirlist.length() > 0) dirlist.remove(dirlist.length() - 1);
     return dirlist;
 }
 
 void FilesystemManager::createDir(const String &path) {
+    
     Serial.print("Creating Dir: ");
     Serial.println(path);
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return;
+    }
     if (activeFS->mkdir(path)) {
         Serial.println("Dir created");
     } else {
@@ -186,8 +272,13 @@ void FilesystemManager::createDir(const String &path) {
 }
 
 bool FilesystemManager::search(const String &path) {
+    
     Serial.print("Search File/Dir: ");
     Serial.println(path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     if (activeFS->exists(path)) {
         Serial.println("File/Dir exists");
         return true;
@@ -198,7 +289,12 @@ bool FilesystemManager::search(const String &path) {
 }
 
 void FilesystemManager::displayFile(const String &path) {
+    
     Serial.printf("Reading file: %s\r\n", path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return;
+    }
     File file = activeFS->open(path.c_str());
     if (!file || file.isDirectory()) {
         Serial.println("- failed to open file for reading");
@@ -212,7 +308,12 @@ void FilesystemManager::displayFile(const String &path) {
 }
 
 String FilesystemManager::readFile(const String &path) {
+    
     Serial.printf("Reading file: %s\r\n", path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return "";
+    }
     String data = "";
     File file = activeFS->open(path.c_str());
     if (!file || file.isDirectory()) {
@@ -227,12 +328,13 @@ String FilesystemManager::readFile(const String &path) {
 }
 
 bool FilesystemManager::writeFile(const String &path, const char *message) {
+    
+    
+    Serial.printf("Writing file: %s\r\n", path.c_str());
     if (!isFilesystemMounted()) {
         Serial.println("Error: No filesystem mounted");
         return false;
     }
-    
-    Serial.printf("Writing file: %s\r\n", path.c_str());
     File file = activeFS->open(path.c_str(), FILE_WRITE);
     if (!file) {
         Serial.println("- failed to open file for writing");
@@ -246,6 +348,11 @@ bool FilesystemManager::writeFile(const String &path, const char *message) {
 
 void FilesystemManager::appendFile(const String &path, const char *message) {
     Serial.printf("Appending to file: %s\r\n", path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return;
+    }
+
     File file = activeFS->open(path.c_str(), FILE_APPEND);
     if (!file) {
         Serial.println("- failed to open file for appending");
@@ -261,6 +368,10 @@ void FilesystemManager::appendFile(const String &path, const char *message) {
 
 bool FilesystemManager::renameFile(const String &path1, const String &path2) {
     Serial.printf("Renaming file %s to %s\r\n", path1.c_str(), path2.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     if (activeFS->rename(path1.c_str(), path2.c_str())) {
         Serial.println("- file renamed");
         return true;
@@ -271,7 +382,12 @@ bool FilesystemManager::renameFile(const String &path1, const String &path2) {
 }
 
 bool FilesystemManager::deleteFile(const String &path) {
+    
     Serial.printf("Deleting file: %s\r\n", path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     if (activeFS->remove(path.c_str())) {
         Serial.println("- file deleted");
         return true;
@@ -282,8 +398,12 @@ bool FilesystemManager::deleteFile(const String &path) {
 }
 
 bool FilesystemManager::deleteDir(const String &path) {
-    Serial.printf("Deleting directory: %s\r\n", path.c_str());
     
+    Serial.printf("Deleting directory: %s\r\n", path.c_str());
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     // First, delete all contents recursively
     File root = activeFS->open(path.c_str());
     if (!root) {
@@ -380,18 +500,25 @@ bool FilesystemManager::format(bool quickFormat) {
 }
 
 bool FilesystemManager::readJSON(const String &path, DynamicJsonDocument &jsonDoc) {
+    
     Serial.print("Reading JSON file: ");
     Serial.println(path.c_str());
-    
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     File file = activeFS->open(path.c_str());
     if (!file || file.isDirectory()) {
         Serial.println("- failed to open file for reading");
         return false;
     }
+    
+    Serial.print("file Size :");
+    Serial.println(file.size());
+
     if(jsonDoc == nullptr){
         jsonDoc = DynamicJsonDocument(file.size() * 2); // Allocate double the file size for safety
     }  
-    
     DeserializationError error = deserializeJson(jsonDoc, file);
     
     file.close();
@@ -401,23 +528,32 @@ bool FilesystemManager::readJSON(const String &path, DynamicJsonDocument &jsonDo
         jsonDoc.clear();
         return false;
     }
+    Serial.println("- JSON read successfully: ");
     return true;
 }
 
 
 bool FilesystemManager::readJSONOBJ(const String &path, DynamicJsonDocument *&jsonDoc) {
+    
     Serial.print("Reading JSON file: ");
     Serial.println(path.c_str());
+
+    if (jsonDoc != nullptr) {
+        delete jsonDoc;
+        jsonDoc = nullptr;
+    }
+    
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
     
     File file = activeFS->open(path.c_str());
     if (!file || file.isDirectory()) {
         Serial.println("- failed to open file for reading");
         return false;
     }
-    if (jsonDoc != nullptr) {
-        delete jsonDoc;
-        jsonDoc = nullptr;
-    }
+    
 
     jsonDoc = new DynamicJsonDocument(file.size() * 2); // Allocate double the file size for safety
 
@@ -434,9 +570,15 @@ bool FilesystemManager::readJSONOBJ(const String &path, DynamicJsonDocument *&js
 }
 
 bool FilesystemManager::writeJSON(const String &path, const DynamicJsonDocument &jsonDoc) {
+    
+
     Serial.print("Writing JSON file: ");
     Serial.println(path.c_str());
-    
+    if (!isFilesystemMounted()) {
+        Serial.println("Error: No filesystem mounted");
+        return false;
+    }
+
     // Delete the file first to ensure we start fresh
     if (activeFS->exists(path.c_str())) {
         activeFS->remove(path.c_str());
