@@ -35,6 +35,7 @@
 // NOTE: Libraries must be included BEFORE the namespace functions that use them
 
 #include "Print.h"
+#include <Preferences.h>
 #include "EEPROM.h"
 #include "delayTimer.h"
 #include "dwindisplay.h"
@@ -111,6 +112,8 @@ RTCManager rtc(0);
 EthernetClient ethClient;
 EthernetManager ethManager;
 
+Preferences subtopicsPref;
+
 #define FILE_SYSTEM FFat
 FilesystemManager fsManagerFFat(FilesystemType::FFAT);
 
@@ -127,6 +130,8 @@ void boardinit(){
     // Initialize pixel LED
     pixelInit();
     setpixel(RED); // Indicate initialization start
+
+    subtopicsPref.begin("subtopics", true);
 
     if(EEPROM.begin(512)){
         Serial.println("EEPROM initialized.");
