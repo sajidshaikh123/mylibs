@@ -1,6 +1,7 @@
 // MQTT_Lib.cpp - Implementation file for MQTT Library
 #include "MQTT_Lib.h"
 #include <WiFi.h>
+#include "RTC_operation.h"
 
 // Constructor - Initializes MQTT settings
 
@@ -60,6 +61,17 @@ String MQTT_Lib::getTopic(String request) {
         Serial.println("⚠ Warning: department is empty or null");
         return temp_topic;
     }
+
+    // Extract department
+    String line = "";
+    if (subtopic.containsKey("line")) {
+        line = String((const char *)subtopic["line"]);
+    }
+    
+    if (line.length() == 0 || line == "null") {
+        Serial.println("⚠ Warning: line is empty or null");
+        return temp_topic;
+    }
     
     // Extract machine name (handle both formats)
     String machinename = "";
@@ -81,6 +93,11 @@ String MQTT_Lib::getTopic(String request) {
     temp_topic += "/";
     temp_topic += department;
     temp_topic += "/";
+
+    if(line.length() > 0){
+        temp_topic += line;
+        temp_topic += "/";
+    }
     
     // Handle special case for wildcard subscription
     if (machinename.equals("+")) {
@@ -130,6 +147,10 @@ void MQTT_Lib::config(const char *ip, uint16_t port, const char *user, const cha
     will_message = String(willMsg);
 }
 
+void MQTT_Lib::setClient(Client &client){
+    PubSubClient::setClient(client);
+}
+
 // Start MQTT connection
 void MQTT_Lib::begin() {
     connect();
@@ -147,15 +168,16 @@ void MQTT_Lib::setsubscribeto(String _sub_to){
 // Attempt to connect to MQTT broker
 bool MQTT_Lib::connect() {
     counter = 0;
-    String will_topic = getTopic("connection/status");
+    String will_topic = getTopic("events/connection_status");
     char buffer[200];
     DynamicJsonDocument status(100);
-    status["connected"] = 0; // Mark as disconnected initially
+    status["status"] = "disconnected"; // Mark as disconnected initially
+    
     serializeJsonPretty(status, buffer);
     
     // Try to establish connection with MQTT broker
     
-    if(!PubSubClient::connect(macAddress.c_str(), mqtt_user.c_str(), mqtt_password.c_str(), will_topic.c_str(), 0, true, buffer)) {
+    if(!PubSubClient::connect(macAddress.c_str(), mqtt_user.c_str(), mqtt_password.c_str(), will_topic.c_str(), 1, true, buffer)) {
         Serial.print(".");
         Serial.print(PubSubClient::state()); // Print connection state
             return false; // Exit if connection fails after multiple attempts
@@ -172,10 +194,11 @@ bool MQTT_Lib::connect() {
     
     
     // Mark as connected
-    status["connected"] = 1;
+    status["status"] = "connected";
+    status["timestamp"] = getDateTime();
     serializeJsonPretty(status, buffer);
-    PubSubClient::publish(getTopic("connection/status").c_str() , buffer,true) ;
-    PubSubClient::publish(getTopic("status").c_str() , buffer) ;
+    PubSubClient::publish(getTopic("events/connection_status").c_str() , buffer,true) ;
+    // PubSubClient::publish(getTopic("status").c_str() , buffer) ;
 
     return true;
 

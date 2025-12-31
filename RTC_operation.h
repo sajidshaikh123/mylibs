@@ -1,20 +1,24 @@
+
+#ifndef RTC_OPERATION_H
+#define RTC_OPERATION_H
+
 #include "pindefinition.h"
 #include <DS3231.h>
 #include <ESP32Time.h>
 
 
-DS3231 RTC;
+static DS3231 RTC;
 
-ESP32Time internalrtc(0); 
-String result = "";
+static ESP32Time internalrtc(0); 
+static String result = "";
 
-bool Century = false;
-bool h12;
-bool PM;
-bool RTC_OK = 0;
+static bool Century = false;
+static bool h12;
+static bool PM;
+static bool RTC_OK = 0;
 
 
-bool RTCInit(uint8_t scl = SCL_PIN, uint8_t sda = SDA_PIN){
+inline bool RTCInit(uint8_t scl = SCL_PIN, uint8_t sda = SDA_PIN){
 
       Wire.begin(sda, scl);
 
@@ -31,7 +35,7 @@ bool RTCInit(uint8_t scl = SCL_PIN, uint8_t sda = SDA_PIN){
       return RTC_OK;
 }
 
-const char * getDateTime(){
+inline const char * getDateTime(){
     result = "";
     if(RTC_OK){
         uint16_t year = RTC.getYear() + 2000;
@@ -123,7 +127,7 @@ const char * getDateTime(){
     return(  result.c_str() );
 }
 
-void setRTC(uint8_t date,uint8_t month,uint16_t year,uint8_t hours,uint8_t min, uint8_t seconds){
+inline void setRTC(uint8_t date,uint8_t month,uint16_t year,uint8_t hours,uint8_t min, uint8_t seconds){
     if(RTC_OK){
         RTC.setClockMode(false); 
         if(year > 2000){
@@ -142,7 +146,7 @@ void setRTC(uint8_t date,uint8_t month,uint16_t year,uint8_t hours,uint8_t min, 
     }
 }
 
-uint8_t getSeconds(){
+inline uint8_t getSeconds(){
     if(RTC_OK){
         return(RTC.getSecond());
     }else{
@@ -150,7 +154,7 @@ uint8_t getSeconds(){
     }
 }
 
-uint8_t getDate(){
+inline uint8_t getDate(){
     if(RTC_OK){
         return(RTC.getDate());
     }else{
@@ -158,7 +162,7 @@ uint8_t getDate(){
     }
 }
 
-uint8_t getMonth(){
+inline uint8_t getMonth(){
     if(RTC_OK){
         return(RTC.getMonth(Century));
     }else{
@@ -166,7 +170,7 @@ uint8_t getMonth(){
     }
 }
 
-uint8_t getMinute(){
+inline uint8_t getMinute(){
     if(RTC_OK){
         return(RTC.getMinute());
     }else{
@@ -174,7 +178,7 @@ uint8_t getMinute(){
     }
 }
 
-uint8_t getHour(){
+inline uint8_t getHour(){
     if(RTC_OK){
         return(RTC.getHour(h12, PM));
     }else{
@@ -182,7 +186,7 @@ uint8_t getHour(){
     }
 }
 
-uint16_t getyear(){
+inline uint16_t getyear(){
     if(RTC_OK){
         return(RTC.getYear());
     }else{
@@ -190,10 +194,12 @@ uint16_t getyear(){
     }
 }
 
-uint16_t getYear(){
+inline uint16_t getYear(){
     if(RTC_OK){
         return(RTC.getYear());
     }else{
       return(internalrtc.getYear());
     }
 }
+
+#endif

@@ -56,6 +56,8 @@
 #include "usb_scanner_Lib.h"
 #include "WeighingScale.h"
 #include "WiFi_manager.h"
+#include <ESP32Ping.h>
+#include "serial_manager.h"
 #include "shift_timing.h"
 // #include "firmware_update.h"  // Moved to end because it depends on other libraries
 
@@ -104,15 +106,22 @@ DelayTimer onesecloop(1000);
 DelayTimer ms_100loop(100);
 
 uint8_t conn_status = 0;
+
+bool wifi_connected = false;
+
 uint8_t mac[6];
 String mac_str = "";
 
 RTCManager rtc(0);
 
 EthernetClient ethClient;
+WiFiClient wifiClient;
 EthernetManager ethManager;
 
 Preferences subtopicsPref;
+Preferences wifiPref;
+Preferences ethernetPref;
+
 
 #define FILE_SYSTEM FFat
 FilesystemManager fsManagerFFat(FilesystemType::FFAT);
@@ -177,8 +186,7 @@ void boardinit(){
     mac_str = WiFi.macAddress();
 
     Serial.print("MAC Address: ");
-    for (int i = 0; i < 6; i++)
-    {
+    for (int i = 0; i < 6; i++){
         if (mac[i] < 16)
             Serial.print("0");
         Serial.print(mac[i], HEX);
@@ -188,24 +196,62 @@ void boardinit(){
     Serial.println();
     WiFi.disconnect();
 
+    wifiPref.begin("wifi", true);
+
+    if(wifiPref.getBool("enabled", false)){
+        String ssid = wifiPref.getString("ssid", "");
+        String password = wifiPref.getString("password", "");
+
+        if(ssid != "" && password != ""){
+            Serial.println("Connecting to saved WiFi credentials...");
+            Serial.print("SSID: "); Serial.println(ssid);
+
+            WiFi.begin(ssid.c_str(), password.c_str());
+            delay(500);
+            // Serial.print("Connecting to WiFi");
+            
+        }else{
+            Serial.println("No valid WiFi credentials found in preferences.");
+        }
+    }else{
+        Serial.println("WiFi not enabled in preferences.");
+    }
+
+    ethernetPref.begin("ethernet", true);
+
+    if(ethernetPref.getBool("enabled", true) ){
+        Serial.println("Initializing Ethernet with saved configuration...");
+
+        bool useDHCP = ethernetPref.getBool("dhcp", true);
+        String ip = ethernetPref.getString("ip", "");
+        String gateway = ethernetPref.getString("gateway", "");
+        String subnet = ethernetPref.getString("subnet", "");
+        String dns = ethernetPref.getString("dns", "");
+        
+        ethManager.setIPSettings(mac, useDHCP, ip.c_str(), subnet.c_str(), gateway.c_str(), dns.c_str());
+        ethManager.begin();
+        ethManager.startPolling(1, 2000); // Poll every 2 seconds on core 1
+    }else{
+        Serial.println("Ethernet not enabled in preferences.");
+    }
     
 }
 
 
 void boardloop(){
+
+    handleSerialCommands();
     if(onesecloop.ontime()){
         // Place 1-second interval tasks here
-        if (ethManager.status() == 1)
-        {
-            if (conn_status == 0)
-            {
+        if (ethManager.status() == 1){
+            if (conn_status == 0){
                 conn_status = 1;
+                mqtt_obj.setClient(ethClient);
                 Serial.println(Ethernet.localIP());
+
                 // HMI.Write_UString(PS_INFO,Ethernet.localIP().toString().c_str()); 
             }
-        }
-        else
-        {
+        }else{
             conn_status = 0;
         }
         toggleLED(conn_status);
@@ -213,9 +259,21 @@ void boardloop(){
 
     if(ms_100loop.ontime()){
         // Place 100-millisecond interval tasks here
-        if (conn_status > 0)
-        {
+        if (conn_status > 0 || wifi_connected){
             mqtt_obj.loop();
+        }
+        if(wifiPref.getBool("enabled", false) ){
+            if(WiFi.status() == WL_CONNECTED ){
+                if(wifi_connected == false){
+                    wifi_connected = true;
+                    mqtt_obj.setClient(wifiClient);
+                    Serial.println("[WiFi] ✓ Connected successfully!");
+                    Serial.print("[WiFi] IP Address: ");
+                    Serial.println(WiFi.localIP());
+                }
+            }else{
+                wifi_connected = false;
+            }
         }
     }
 }

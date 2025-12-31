@@ -11,11 +11,9 @@ bool PCF8574_Output::begin() {
     Wire.setPins(sdaPin,sclPin);
     Wire.begin(sdaPin, sclPin);
     if (pcf2.begin(0x00)) {
-        Serial.println("OUTPUT INIT OK");
         status = true;
     } else {
         status = false;
-        Serial.println("OUTPUT INIT ERROR");
     }
     return status;
 }

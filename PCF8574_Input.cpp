@@ -12,10 +12,8 @@ bool PCF8574_Input::begin() {
     Wire.setPins(sdaPin,sclPin);
     Wire.begin(sdaPin, sclPin);
     if (pcf.begin(0xFF)) {
-        Serial.println("INPUT INIT OK");
         status = true;
     } else {
-        Serial.println("INPUT INIT ERROR");
         status = false;
     }
     pinMode(intPin, INPUT_PULLUP);

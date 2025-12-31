@@ -17,6 +17,7 @@ public:
     String getTopic(String request); // Construct full topic string
     void config(const char *ip, uint16_t port, const char *user, const char *password, const char *willMsg, Client &client);
     void setMacAddress(String temp_mac);
+    void setClient(Client &client);
     String getMacAddress();
     void setsubscribeto(String _sub_to);
     void begin();  // Initialize MQTT connection
