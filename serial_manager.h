@@ -5,6 +5,9 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <Ethernet.h>
+#include "serial_file_handler.h"
+#include "serial_mqtt_handler.h"
+#include "subtopic_handler.h"
 
 #define DEBUG_MODE 1
 #define DEBUG_SERIAL        Serial  // Serial port for debug output
@@ -19,10 +22,19 @@
     #define DEBUG_PRINTF(...)
 #endif
 
-// External reference to WiFi preferences (should be initialized in main code)
+// External reference to preferences (should be initialized in main code)
 extern Preferences wifiPref;
 extern Preferences ethernetPref;
+extern Preferences mqttPref;
+extern Preferences hmiPref;
 
+std::function<void(String cmd, String args)> serial_processcallback = nullptr;
+
+
+void setSerialCommandCallback(std::function<void(String cmd, String args)> callback)
+{
+    serial_processcallback = callback;
+}
 
 void printHelp() {
     Serial.println("                  GATEWAY COMMANDS                          ");
@@ -32,8 +44,11 @@ void printHelp() {
     Serial.println("  wifi [args]              - WiFi configuration commands");
     Serial.println("  eth [args]               - Ethernet configuration commands");
     Serial.println("  mqtt [args]              - MQTT configuration commands");
+    Serial.println("  subtopic [args]          - Subtopic configuration commands");
+    Serial.println("  hmi [args]               - HMI display configuration commands");
     Serial.println("  modbus [args]            - Modbus device management commands");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
+    Serial.println("  file [args]              - File system commands");
     Serial.println("  show                     - Show system status");
     Serial.println("  reboot                   - Reboot the device");
     Serial.println("  factory                  - Restore factory settings");
@@ -86,6 +101,15 @@ void printRTCHelp() {
     Serial.println("  rtc time                 - Show only time");
     Serial.println("  rtc status               - Show RTC status (external/internal)");
     Serial.println("Example: rtc set 2025-12-31 23:59:59");
+}
+
+void printHMIHelp() {
+    Serial.println("============ HMI Commands ============");
+    Serial.println("  hmi enable               - Enable HMI display");
+    Serial.println("  hmi disable              - Disable HMI display");
+    Serial.println("  hmi status               - Show HMI status");
+    Serial.println("  hmi show                 - Show saved config");
+    Serial.println("Note: Changes require device reboot to take effect");
 }
     
         
@@ -571,6 +595,73 @@ void handleEthernetCommand(String args) {
 }
 
 
+// ==================== HMI COMMAND HANDLER ====================
+void handleHMICommand(String args) {
+    args.trim();
+    
+    // Parse subcommand
+    int spaceIndex = args.indexOf(' ');
+    String subCmd, subArgs;
+    
+    if (spaceIndex > 0) {
+        subCmd = args.substring(0, spaceIndex);
+        subArgs = args.substring(spaceIndex + 1);
+        subArgs.trim();
+    } else {
+        subCmd = args;
+        subArgs = "";
+    }
+    
+    subCmd.toLowerCase();
+    
+    if (subCmd == "" || subCmd == "help" || subCmd == "?") {
+        printHMIHelp();
+    }
+    else if (subCmd == "enable") {
+        hmiPref.end();
+        hmiPref.begin("hmi", false);
+        hmiPref.putBool("enabled", true);
+        hmiPref.end();
+        hmiPref.begin("hmi", true);
+        
+        Serial.println("[HMI] ✓ Enabled (will initialize on next boot)");
+        Serial.println("[HMI] Please reboot the device for changes to take effect");
+    }
+    else if (subCmd == "disable") {
+        hmiPref.end();
+        hmiPref.begin("hmi", false);
+        hmiPref.putBool("enabled", false);
+        hmiPref.end();
+        hmiPref.begin("hmi", true);
+        
+        Serial.println("[HMI] ✓ Disabled (will not initialize on next boot)");
+        Serial.println("[HMI] Please reboot the device for changes to take effect");
+    }
+    else if (subCmd == "status") {
+        Serial.println("=== HMI Status ===");
+        
+        bool enabled = hmiPref.getBool("enabled", true);
+        Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
+        Serial.printf("Baud Rate: 115200\n");
+        Serial.printf("Config: SERIAL_8N1\n");
+        
+        Serial.println("==================");
+    }
+    else if (subCmd == "show") {
+        Serial.println("=== Saved HMI Configuration ===");
+        
+        bool enabled = hmiPref.getBool("enabled", true);
+        Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
+        
+        Serial.println("===============================");
+    }
+    else {
+        Serial.printf("[HMI] ✗ Unknown command: %s\n", subCmd.c_str());
+        Serial.println("[HMI] Type 'hmi help' for available commands");
+    }
+}
+
+
 // ==================== RTC COMMAND HANDLER ====================
 void handleRTCCommand(String args) {
     args.trim();
@@ -704,6 +795,13 @@ void handleSystemCommand(String cmd, String args) {
             ethernetPref.end();
             Serial.println("[System] Ethernet config cleared");
             
+            // Clear HMI preferences
+            hmiPref.end();
+            hmiPref.begin("hmi", false);
+            hmiPref.clear();
+            hmiPref.end();
+            Serial.println("[System] HMI config cleared");
+            
             Serial.println("[System] ✓ Factory reset complete");
             Serial.println("[System] Rebooting in 2 seconds...");
             Serial.flush();
@@ -774,8 +872,13 @@ void executeCommand(String cmd, String args) {
         handleEthernetCommand(args);
     }
     else if (cmd == "mqtt") {
-        DEBUG_PRINT("mqtt");
-        //handleMQTTCommand(args);
+        handleMQTTCommand(args);
+    }
+    else if (cmd == "subtopic" || cmd == "sub") {
+        handleSubtopicCommand(args);
+    }
+    else if (cmd == "hmi") {
+        handleHMICommand(args);
     }
     else if (cmd == "modbus") {
         DEBUG_PRINT("modbus");
@@ -784,10 +887,17 @@ void executeCommand(String cmd, String args) {
     else if (cmd == "rtc") {
         handleRTCCommand(args);
     }
+    else if (cmd == "file" || cmd == "fs") {
+        handleFileCommand(args);
+    }
     else if (cmd == "show" || cmd == "reboot" || cmd == "factory") {
         handleSystemCommand(cmd, args);
     }
     else {
+        if(serial_processcallback != nullptr) {
+            serial_processcallback(cmd, args);
+            return;
+        }
         Serial.printf("[CMD] ✗ Unknown command: %s\n", cmd.c_str());
         Serial.println("[CMD] Type 'help' for available commands");
     }

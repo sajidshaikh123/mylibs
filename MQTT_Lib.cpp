@@ -68,10 +68,10 @@ String MQTT_Lib::getTopic(String request) {
         line = String((const char *)subtopic["line"]);
     }
     
-    if (line.length() == 0 || line == "null") {
-        Serial.println("⚠ Warning: line is empty or null");
-        return temp_topic;
-    }
+    // if (line.length() == 0 || line == "null") {
+    //     Serial.println("⚠ Warning: line is empty or null");
+    //     return temp_topic;
+    // }
     
     // Extract machine name (handle both formats)
     String machinename = "";

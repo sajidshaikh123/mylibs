@@ -35,6 +35,7 @@ class dwindisplay
 {
     private:  /* Private data / methods*/
     //Stream* HMI_Serial; 
+    bool hmi_enable = false;
         uint8_t last_len =0;
     public:
         void begin(unsigned long baud, uint32_t config, int8_t rxPin, int8_t txPin);

@@ -37,6 +37,7 @@
 #include "Print.h"
 #include <Preferences.h>
 #include "EEPROM.h"
+#include "dwin_function.h"
 #include "delayTimer.h"
 #include "dwindisplay.h"
 #include "EthernetManager.h"
@@ -59,6 +60,7 @@
 #include <ESP32Ping.h>
 #include "serial_manager.h"
 #include "shift_timing.h"
+#include "mqtt_publisher.h"
 // #include "firmware_update.h"  // Moved to end because it depends on other libraries
 
 // Helper function declarations for version info
@@ -106,6 +108,7 @@ DelayTimer onesecloop(1000);
 DelayTimer ms_100loop(100);
 
 uint8_t conn_status = 0;
+bool mqtt_connected = 0;
 
 bool wifi_connected = false;
 
@@ -121,6 +124,12 @@ EthernetManager ethManager;
 Preferences subtopicsPref;
 Preferences wifiPref;
 Preferences ethernetPref;
+// Declare MQTT preferences
+Preferences mqttPref;
+Preferences hmiPref;
+
+// Subtopic JSON document (used by MQTT)
+DynamicJsonDocument subtopic(512);
 
 
 #define FILE_SYSTEM FFat
@@ -135,12 +144,55 @@ PCF8574_Input inputExpander = PCF8574_Input(INPUT_ADDR, SCL_PIN, SDA_PIN, INPUT_
 
 extern void inputISR();
 
+std::function<void(char*, uint8_t*, unsigned int)> mqtt_callback = nullptr;
+
+
+
+
+void mqttcallbackmain(char *topic, byte *payload, unsigned int length)
+{
+    // Handle incoming MQTT messages here
+
+    if (mqtt_callback) {
+        mqtt_callback(topic, payload, length);
+    }else{
+        Serial.print("Message arrived [");
+        Serial.print(topic);
+        Serial.print("] ");
+        for (unsigned int i = 0; i < length; i++) {
+            Serial.print((char)payload[i]);
+        }
+        Serial.println();
+    }
+}
+
+void mqtt_setcallback(std::function<void(char*, uint8_t*, unsigned int)> callback)
+{
+    mqtt_callback = callback;
+}
+
 void boardinit(){
+
+    Serial.begin(115200);
+    Serial.setTimeout(300);
+    Serial.println("IIOT Gateway Board ");
+
+    // Initialize HMI if enabled in preferences
+    hmiPref.begin("hmi", true);
+    if(hmiPref.getBool("enabled", true)) {
+        Serial.println("Initializing HMI...");
+        HMI.begin(115200, SERIAL_8N1, DWIN_RX_PIN, DWIN_TX_PIN);
+        HMI.reset();
+    } else {
+        Serial.println("HMI disabled in preferences.");
+    }
+
     // Initialize pixel LED
     pixelInit();
     setpixel(RED); // Indicate initialization start
 
-    subtopicsPref.begin("subtopics", true);
+    // Initialize and load subtopic configuration
+    initSubtopic();
 
     if(EEPROM.begin(512)){
         Serial.println("EEPROM initialized.");
@@ -234,6 +286,33 @@ void boardinit(){
     }else{
         Serial.println("Ethernet not enabled in preferences.");
     }
+
+    mqttPref.begin("mqtt", true);
+
+    // Load MQTT configuration
+    bool mqttEnabled = mqttPref.getBool("enabled", false);
+    String mqttServer = mqttPref.getString("server", "");
+    uint16_t mqttPort = mqttPref.getUShort("port", 1883);
+    String mqttUsername = mqttPref.getString("username", "");
+    String mqttPassword = mqttPref.getString("password", "");
+    String mqttTransport = mqttPref.getString("transport", "auto");
+    // mqttPref.end();
+    
+    if(mqttEnabled){
+        Serial.println("MQTT is enabled in preferences.");
+        if(mqttTransport == "wifi"){
+            mqtt_obj.config((const char *)mqttServer.c_str(), (int)mqttPort, (const char *)mqttUsername.c_str(), (const char *)mqttPassword.c_str(), "disconnected", wifiClient);
+        }else if(mqttTransport == "ethernet"){
+            mqtt_obj.config((const char *)mqttServer.c_str(), (int)mqttPort, (const char *)mqttUsername.c_str(), (const char *)mqttPassword.c_str(), "disconnected", ethClient);
+        }else{ // auto
+            mqtt_obj.config((const char *)mqttServer.c_str(), (int)mqttPort, (const char *)mqttUsername.c_str(), (const char *)mqttPassword.c_str(), "disconnected", ethClient);
+        }
+        mqtt_obj.setsubscribeto("#");
+
+        mqtt_obj.setsubtopic(subtopic);
+        mqtt_obj.setCallback(mqttcallbackmain);
+        mqtt_obj.setMacAddress(mac_str);
+    }
     
 }
 
@@ -261,6 +340,7 @@ void boardloop(){
         // Place 100-millisecond interval tasks here
         if (conn_status > 0 || wifi_connected){
             mqtt_obj.loop();
+            mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
         }
         if(wifiPref.getBool("enabled", false) ){
             if(WiFi.status() == WL_CONNECTED ){

@@ -36,6 +36,9 @@
 
         #define  TX2_PIN    35
         #define  RX2_PIN    17
+
+        #define DWIN_TX_PIN 37
+        #define DWIN_RX_PIN 36
         
     #else
         #define TRIGGER_PIN 0  // Default ESP32
@@ -56,6 +59,9 @@
 
         #define  TX2_PIN    25
         #define  RX2_PIN    4
+
+        #define DWIN_TX_PIN 17
+        #define DWIN_RX_PIN 16
 
     #endif
 #else

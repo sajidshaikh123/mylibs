@@ -5,6 +5,7 @@ HardwareSerial HMI_Serial(1);
 void dwindisplay::begin(unsigned long baud, uint32_t config, int8_t rxPin, int8_t txPin)
 {
    HMI_Serial.begin(baud,config,rxPin,txPin);
+   hmi_enable = true;
 }
 
 int dwindisplay::available()
@@ -30,10 +31,13 @@ size_t dwindisplay::read(uint8_t *buffer, size_t size)
 
 size_t dwindisplay::write(uint8_t c)
 {
+    if(!hmi_enable) return 0;
     HMI_Serial.write(c);
     return 1;
 }
 void dwindisplay::readRTC() {
+
+    if(!hmi_enable) return;
 
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
@@ -46,6 +50,8 @@ void dwindisplay::readRTC() {
 }
 
 void dwindisplay::Write_Register(uint16_t _address, uint8_t *_Data) {
+
+    if(!hmi_enable) return;
 
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
@@ -62,8 +68,10 @@ void dwindisplay::Write_Register(uint16_t _address, uint8_t *_Data) {
 
 // Write 0x5A, 0xA5, 0x05, 0x82, the high byte of the "_SP_Register" argument, 
 //the low byte of the "_SP_Register" argument, 0xFF, and 0x00 over the serial interface.
-void dwindisplay::hide(uint16_t _SP_Register)
-{
+void dwindisplay::hide(uint16_t _SP_Register){
+    
+    if(!hmi_enable) return;
+
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
     HMI_Serial.write(0x05);
@@ -78,8 +86,10 @@ void dwindisplay::hide(uint16_t _SP_Register)
 
 // Write 0x5A, 0xA5, 0x05, 0x82, the high byte of the "_SP_Register" argument, the low byte of the "_SP_Register" argument,
 // the high byte of the "_address" argument, and the low byte of the "_address" argument over the serial interface.
-void dwindisplay::show(uint16_t _SP_Register, uint16_t _address)
-{
+void dwindisplay::show(uint16_t _SP_Register, uint16_t _address){
+    
+    if(!hmi_enable) return;
+
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
     HMI_Serial.write(0x05);
@@ -90,8 +100,10 @@ void dwindisplay::show(uint16_t _SP_Register, uint16_t _address)
     HMI_Serial.write(_address);
 }
 
-void dwindisplay::showPage(uint16_t _page)
-{
+void dwindisplay::showPage(uint16_t _page){
+
+    if(!hmi_enable) return;
+
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
     HMI_Serial.write(0x07);
@@ -111,6 +123,8 @@ void dwindisplay::showPage(uint16_t _page)
 // Add a delay of 1 millisecond to ensure that the data is completely sent over the serial interface.
 
 void dwindisplay::Write_Number(uint16_t _address, uint16_t _Data) {
+    
+    if(!hmi_enable) return;
 
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
@@ -126,27 +140,31 @@ void dwindisplay::Write_Number(uint16_t _address, uint16_t _Data) {
 
 void dwindisplay::Write_Register_Long(uint16_t _address, uint8_t *_Data, uint8_t _Size) {
 
-// Declare Length
-uint8_t _Pack_Size = 3;
+    if(!hmi_enable) return;
 
-// Set Pack Header
-HMI_Serial.write(0x5A);
-HMI_Serial.write(0xA5);
-HMI_Serial.write(_Size + _Pack_Size);
-HMI_Serial.write(0x82);
-HMI_Serial.write(_address >> 8);
-HMI_Serial.write(_address );
+    // Declare Length
+    uint8_t _Pack_Size = 3;
 
-// Send Data Pack
-for (size_t i = 0; i < _Size; i++) HMI_Serial.write(_Data[i]);
+    // Set Pack Header
+    HMI_Serial.write(0x5A);
+    HMI_Serial.write(0xA5);
+    HMI_Serial.write(_Size + _Pack_Size);
+    HMI_Serial.write(0x82);
+    HMI_Serial.write(_address >> 8);
+    HMI_Serial.write(_address );
 
-// Command Delay
-delay(1);
+    // Send Data Pack
+    for (size_t i = 0; i < _Size; i++) HMI_Serial.write(_Data[i]);
+
+    // Command Delay
+    delay(1);
 }
 
 // Function to set the text color for the display
-void dwindisplay::setTextColor(uint16_t _address, uint16_t color) 
-{
+void dwindisplay::setTextColor(uint16_t _address, uint16_t color) {
+    
+    if(!hmi_enable) return;
+    
     // Write data to the specified address
     uint8_t _data[2];
     _data[0] = (color >> 8);
@@ -159,10 +177,15 @@ void dwindisplay::setTextColor(uint16_t _address, uint16_t color)
 // Call the Write_Register_Long() function with the "_address" argument, a pointer to the "_Data" character array that is cast to a pointer of uint8_t type, and the length of the "_Data" array obtained using the strlen() function. This writes the string of characters to the specified address on the display module
 
 void dwindisplay::Write_String(uint16_t _address, String  _Data) {    
+    
+    if(!hmi_enable) return;
+
     this->Write_Register_Long(_address,(uint8_t *)_Data.c_str(),_Data.length()+1);
 }
 
 void dwindisplay::message(uint16_t _address, String  _Data) {
+
+    if(!hmi_enable) return;
 
     String temp_str="";
     for(int i = 0;i < last_len ; i++){
@@ -175,6 +198,8 @@ void dwindisplay::message(uint16_t _address, String  _Data) {
 
 
 void dwindisplay::Write_UString(uint16_t _address, String  _Data) {
+
+    if(!hmi_enable) return;
 
     uint8_t _Pack_Size = 3;
 	uint16_t _Size = _Data.length() + 1;
@@ -196,8 +221,10 @@ void dwindisplay::Write_UString(uint16_t _address, String  _Data) {
 	delay(1);
 
 }
-void dwindisplay::touchevent(uint16_t _page_no, uint8_t _control_no, uint8_t _control_type,uint16_t _mode)
-{
+void dwindisplay::touchevent(uint16_t _page_no, uint8_t _control_no, uint8_t _control_type,uint16_t _mode){
+    
+    if(!hmi_enable) return;
+
     delay(20);
     HMI_Serial.write(0x5A);
     HMI_Serial.write(0xA5);
@@ -222,11 +249,13 @@ void dwindisplay::touchevent(uint16_t _page_no, uint8_t _control_no, uint8_t _co
 // Declare an array "reset_data" with four elements and initialize it with the values { 0x55, 0xAA, 0x5A, 0xA5 }.
 // Call the member function "Write_Register_Long" and pass the "Reset_Register" object, "reset_data" array, and the size of "reset_data" as arguments.
 
-void dwindisplay::reset()
-{
-        uint16_t Reset_Register = { 0x0004 };
-        uint8_t reset_data[4] = { 0x55, 0xAA, 0x5A, 0xA5 };
-        this->Write_Register_Long(Reset_Register, reset_data, sizeof(reset_data)); 
+void dwindisplay::reset(){
+    
+    if(!hmi_enable) return;
+
+    uint16_t Reset_Register = { 0x0004 };
+    uint8_t reset_data[4] = { 0x55, 0xAA, 0x5A, 0xA5 };
+    this->Write_Register_Long(Reset_Register, reset_data, sizeof(reset_data)); 
 }
 
 // This function sets the date and time on the display module.
@@ -238,6 +267,8 @@ void dwindisplay::reset()
 // Call the member function "Write_Register_Long" and pass the "Time_Stamp_Register" object, "Data" array, and the size of "Data" as arguments.
 
 void dwindisplay::Time_Stamp(uint8_t _Day, uint8_t _Month, uint8_t _Year, uint8_t _Hour, uint8_t _Minute, uint8_t _Second) {
+
+    if(!hmi_enable) return;
 
     // Declare Default Data Array
     uint16_t Time_Stamp_Register = {0x009C}; // RTC Setting Address
@@ -258,6 +289,8 @@ void dwindisplay::Time_Stamp(uint8_t _Day, uint8_t _Month, uint8_t _Year, uint8_
 }
 
 void dwindisplay::Sleep(bool _Status,uint8_t low_brightness , uint16_t sleep_after ) {
+
+    if(!hmi_enable) return;
 
     uint16_t Sleep_Register = {0x0082};
     // Declare Variables
@@ -288,8 +321,10 @@ void dwindisplay::Sleep(bool _Status,uint8_t low_brightness , uint16_t sleep_aft
 // Store the high byte of "onTime" in Data[0] and the low byte in Data[1].
 // Call the member function "Write_Register" and pass the "buzzer" object and "Data" array as arguments.
 
-void dwindisplay::buzzerOn(uint16_t onTime)
-{
+void dwindisplay::buzzerOn(uint16_t onTime){
+    
+    if(!hmi_enable) return;
+
     uint16_t buzzer = { 0x00A0 };
     uint8_t Data[2];
     Data[0] = (onTime >> 8);
