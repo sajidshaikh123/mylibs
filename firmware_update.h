@@ -66,7 +66,7 @@ void sendOTAStatusToMQTT(const String& status, const String& message, const Stri
   
   otaStatusDoc["status"] = status;
   otaStatusDoc["message"] = message;
-  otaStatusDoc["timestamp"] = getDateTime();
+  otaStatusDoc["timestamp"] = rtc.getDateTime();
   otaStatusDoc["device_mac"] = WiFi.macAddress();
   
   if (version.length() > 0) {
@@ -350,12 +350,12 @@ bool performOTAUpdateWithParts(const String& host, int port, const String& path)
 
 // Publish OTA status to server
 void publishOTAStatus(const String& status, const String& message) {
-    if(conn_status < 2) return;
+    if(mqtt_obj.connectionStatus() != MQTT_CONNECTED) return;
     
     DynamicJsonDocument doc(300);
     doc["status"] = status;
     doc["message"] = message;
-    doc["timestamp"] = getDateTime();
+    doc["timestamp"] = rtc.getDateTime();
     doc["firmware_version"] = "1.0.0"; // Add your version
     doc["free_heap"] = ESP.getFreeHeap();
     

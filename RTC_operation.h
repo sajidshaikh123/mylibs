@@ -141,6 +141,8 @@ inline void setRTC(uint8_t date,uint8_t month,uint16_t year,uint8_t hours,uint8_
         RTC.setMinute(min);
         RTC.setSecond(seconds);
         RTC.setClockMode(false);
+
+        internalrtc.setTime(seconds,min,hours,date,month,year);
     }else{
         internalrtc.setTime(seconds,min,hours,date,month,year);
     }

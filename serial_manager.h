@@ -106,6 +106,7 @@ void printRTCHelp() {
 void printHMIHelp() {
     Serial.println("============ HMI Commands ============");
     Serial.println("  hmi enable               - Enable HMI display");
+    Serial.println("  hmi upload               - Upload HMI firmware");
     Serial.println("  hmi disable              - Disable HMI display");
     Serial.println("  hmi status               - Show HMI status");
     Serial.println("  hmi show                 - Show saved config");
@@ -616,6 +617,9 @@ void handleHMICommand(String args) {
     
     if (subCmd == "" || subCmd == "help" || subCmd == "?") {
         printHMIHelp();
+    }else if (subCmd == "upload" ) {
+            upload_flag = true;
+            Serial.println("[HMI] ✓ Upload mode enabled. Use the HMI uploader tool to upload files.");
     }
     else if (subCmd == "enable") {
         hmiPref.end();
@@ -686,22 +690,21 @@ void handleRTCCommand(String args) {
     }
     else if (subCmd == "show" || subCmd == "status") {
         Serial.println("=== RTC Status ===");
-        extern bool RTC_OK;
-        Serial.printf("RTC Type: %s\n", RTC_OK ? "External (DS3231)" : "Internal (ESP32)");
-        Serial.printf("Date/Time: %s\n", getDateTime());
-        Serial.printf("Year: %d\n", getYear());
-        Serial.printf("Month: %02d\n", getMonth());
-        Serial.printf("Date: %02d\n", getDate());
-        Serial.printf("Hour: %02d\n", getHour());
-        Serial.printf("Minute: %02d\n", getMinute());
-        Serial.printf("Second: %02d\n", getSeconds());
+        Serial.printf("RTC Type: %s\n", rtc.isExternalRTCAvailable() ? "External (DS3231)" : "Internal (ESP32)");
+        Serial.printf("Date/Time: %s\n", rtc.getDateTime());
+        Serial.printf("Year: %d\n", rtc.getYear());
+        Serial.printf("Month: %02d\n", rtc.getMonth());
+        Serial.printf("Date: %02d\n", rtc.getDay());
+        Serial.printf("Hour: %02d\n", rtc.getHour());
+        Serial.printf("Minute: %02d\n", rtc.getMinute());
+        Serial.printf("Second: %02d\n", rtc.getSecond());
         Serial.println("==================");
     }
     else if (subCmd == "date") {
-        Serial.printf("Date: %d-%02d-%02d\n", getYear(), getMonth(), getDate());
+        Serial.printf("Date: %d-%02d-%02d\n", rtc.getYear(), rtc.getMonth(), rtc.getDay());
     }
     else if (subCmd == "time") {
-        Serial.printf("Time: %02d:%02d:%02d\n", getHour(), getMinute(), getSeconds());
+        Serial.printf("Time: %02d:%02d:%02d\n", rtc.getHour(), rtc.getMinute(), rtc.getSecond());
     }
     else if (subCmd == "set") {
         if (subArgs.length() == 0) {
@@ -750,10 +753,10 @@ void handleRTCCommand(String args) {
         }
         
         // Set RTC
-        setRTC(day, month, year, hour, minute, second);
+        rtc.setDateTime(day, month, year, hour, minute, second);
         
         Serial.println("[RTC] ✓ Date/time set successfully");
-        Serial.printf("[RTC] New date/time: %s\n", getDateTime());
+        Serial.printf("[RTC] New date/time: %s\n", rtc.getDateTime());
     }
     else {
         Serial.printf("[RTC] ✗ Unknown command: %s\n", subCmd.c_str());
@@ -925,6 +928,10 @@ void parseSerialCommand(String command) {
 
 
 void handleSerialCommands(){
+    if(upload_flag){
+        // In upload mode, do not process other commands
+        return;
+    }
     if(Serial.available()){
         String command = Serial.readStringUntil('\n');
         command.trim();

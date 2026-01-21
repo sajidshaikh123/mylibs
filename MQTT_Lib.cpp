@@ -1,7 +1,10 @@
 // MQTT_Lib.cpp - Implementation file for MQTT Library
 #include "MQTT_Lib.h"
 #include <WiFi.h>
-#include "RTC_operation.h"
+#include "RTCManager.h"
+
+// Declare external rtc instance from iotboard.h
+extern RTCManager rtc;
 
 // Constructor - Initializes MQTT settings
 
@@ -195,7 +198,7 @@ bool MQTT_Lib::connect() {
     
     // Mark as connected
     status["status"] = "connected";
-    status["timestamp"] = getDateTime();
+    status["timestamp"] = rtc.getDateTime();
     serializeJsonPretty(status, buffer);
     PubSubClient::publish(getTopic("events/connection_status").c_str() , buffer,true) ;
     // PubSubClient::publish(getTopic("status").c_str() , buffer) ;

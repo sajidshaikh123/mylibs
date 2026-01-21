@@ -53,7 +53,7 @@ void setup() {
 void loop() {
     // Display full date and time
     Serial.print("DateTime: ");
-    Serial.println(rtc.getDateTime());
+    Serial.println(rtc.rtc.getDateTime());
     
     // Display individual components
     Serial.print("Individual values -> ");

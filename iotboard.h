@@ -42,7 +42,11 @@
 #include "dwindisplay.h"
 #include "EthernetManager.h"
 #include "RTCManager.h"
-#include "RTC_operation.h"
+// #include "RTC_operation.h"
+
+
+RTCManager rtc(0);
+
 // #include "Filesystem.h"
 #include "FilesystemManager.h"
 #include "jsonoperation.h"
@@ -115,7 +119,6 @@ bool wifi_connected = false;
 uint8_t mac[6];
 String mac_str = "";
 
-RTCManager rtc(0);
 
 EthernetClient ethClient;
 WiFiClient wifiClient;
@@ -333,7 +336,11 @@ void boardloop(){
         }else{
             conn_status = 0;
         }
-        toggleLED(conn_status);
+        if(mqtt_connected){
+            toggleLED(2);
+        }else{
+            toggleLED(conn_status);
+        }
     }
 
     if(ms_100loop.ontime()){

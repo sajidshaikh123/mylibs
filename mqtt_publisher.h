@@ -1,5 +1,5 @@
 #include "mqtt_lib.h"
-#include "RTC_operation.h"
+#include "RTCManager.h"
 
 class MQTTPublisher {
     private:
@@ -8,9 +8,10 @@ class MQTTPublisher {
         DynamicJsonDocument* doc; 
         const char* topic; 
         bool retained; 
+        int qos = 0;
     public:
-        MQTTPublisher(MQTT_Lib* client, const char* pub_topic, int json_size ,bool retain_msg = false)
-            : mqttClient(client), topic(pub_topic), retained(retain_msg) {
+        MQTTPublisher(MQTT_Lib* client, const char* pub_topic, int json_size ,bool retain_msg = false, int quality_of_service = 0)
+            : mqttClient(client), topic(pub_topic), retained(retain_msg), qos(quality_of_service) {
             send_flag = false;
             doc = new DynamicJsonDocument(json_size);
         }
@@ -31,24 +32,24 @@ class MQTTPublisher {
 
         void setData(const char* key, const char* value) {
             (*doc)[key] = value;
-            (*doc)["timestamp"] = getDateTime();
+            (*doc)["timestamp"] = rtc.getDateTime();
             send_flag = true;
         }
 
         void setData(const char* key, int value) {
             (*doc)[key] = value;
-            (*doc)["timestamp"] = getDateTime();
+            (*doc)["timestamp"] = rtc.getDateTime();
             send_flag = true;
         }
         void setData(const char* key, float value) {
             (*doc)[key] = value;
-            (*doc)["timestamp"] = getDateTime();
+            (*doc)["timestamp"] = rtc.getDateTime();
             send_flag = true;
         }
         
         void setData(const char* key, double value) {
             (*doc)[key] = value;
-            (*doc)["timestamp"] = getDateTime();
+            (*doc)["timestamp"] = rtc.getDateTime();
             send_flag = true;
         }
         
@@ -74,7 +75,7 @@ class MQTTPublisher {
             if (send_flag && mqttClient->connectionStatus() == MQTT_CONNECTED) {
                 String payload;
                 serializeJson(*doc, payload);
-                // Serial.println("[MQTT PUBLISH] Topic: " + String(mqttClient->getTopic(topic)) + " Payload: " + payload);
+                // Serial.println("[MQTT PUBLISH] Topic: " + String(mqtt_obj.getTopic(topic)) + " Payload: " + payload);
                 send_flag = !mqttClient->publish(mqttClient->getTopic(topic).c_str(), payload.c_str(), retained);
                 
             }

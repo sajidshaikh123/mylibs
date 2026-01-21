@@ -149,6 +149,7 @@ uint8_t RTCManager::getSecond() {
     }
 }
 
+
 /**
  * @brief Get current minute
  */
@@ -230,14 +231,8 @@ float RTCManager::getTemperature() {
  * @brief Get Unix timestamp
  */
 unsigned long RTCManager::getEpoch() {
-    if (externalRTCAvailable) {
-        // Calculate epoch from DS3231
-        // This is a simplified calculation
-        // For accurate epoch, you might want to use a library like TimeLib
-        return 0; // Placeholder - implement if needed
-    } else {
-        return internalRTC.getEpoch();
-    }
+    
+    return internalRTC.getEpoch();
 }
 
 /**

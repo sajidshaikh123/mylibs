@@ -13,13 +13,13 @@ bool isValidSubtopicString(const String& str);
 
 // Publish subtopic status
 void publishSubtopicStatus(const String& status, const String& message, const String& details) {
-    if (conn_status < 2) return;
+    if (mqtt_obj.connectionStatus() != MQTT_CONNECTED) return;
     
     DynamicJsonDocument statusDoc(400);
     statusDoc["status"] = status;
     statusDoc["message"] = message;
     statusDoc["details"] = details;
-    statusDoc["timestamp"] = getDateTime();
+    statusDoc["timestamp"] = rtc.getDateTime();
     
     if (status == "SUCCESS") {
         statusDoc["current_subtopic"] = subtopic;
@@ -100,11 +100,11 @@ bool validateSubtopicContent(const DynamicJsonDocument& doc) {
 
 // Log subtopic changes
 // void logSubtopicChange(const DynamicJsonDocument& oldSub, const DynamicJsonDocument& newSub) {
-//     if (conn_status < 2) return;
+//     if (mqtt_obj.connectionStatus() != MQTT_CONNECTED) return;
     
 //     DynamicJsonDocument changeLog(800);
 //     changeLog["event"] = "subtopic_changed";
-//     changeLog["timestamp"] = getDateTime();
+//     changeLog["timestamp"] = rtc.getDateTime();
 //     changeLog["old_subtopic"] = oldSub;
 //     changeLog["new_subtopic"] = newSub;
     
@@ -376,13 +376,13 @@ bool isSubtopicDataChanged(const String& newData) {
 
 // // Status publishing function for subtopic
 // void publishSubtopicStatus(const String& status, const String& message, const String& details) {
-//     if (conn_status < 2) return;
+//     if (mqtt_obj.connectionStatus() != MQTT_CONNECTED) return;
     
 //     DynamicJsonDocument statusDoc(400);
 //     statusDoc["status"] = status;
 //     statusDoc["message"] = message;
 //     statusDoc["details"] = details;
-//     statusDoc["timestamp"] = getDateTime();
+//     statusDoc["timestamp"] = rtc.getDateTime();
     
 //     if (status == "SUCCESS") {
 //         statusDoc["current_config"] = subtopic;
@@ -399,11 +399,11 @@ bool isSubtopicDataChanged(const String& newData) {
 
 // Function to log subtopic changes
 void logSubtopicChange(const DynamicJsonDocument& oldData, const DynamicJsonDocument& newData) {
-    if (conn_status < 2) return;
+    if (mqtt_obj.connectionStatus() != MQTT_CONNECTED) return;
     
     DynamicJsonDocument changeLog(1000);
     changeLog["event"] = "subtopic_changed";
-    changeLog["timestamp"] = getDateTime();
+    changeLog["timestamp"] = rtc.getDateTime();
     changeLog["old_config"] = oldData;
     changeLog["new_config"] = newData;
     
