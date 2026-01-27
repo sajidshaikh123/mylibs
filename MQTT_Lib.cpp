@@ -141,8 +141,8 @@ void MQTT_Lib::config(const char *ip, uint16_t port, const char *user, const cha
     PubSubClient::setClient(client);
     PubSubClient::setServer(mqttIP, port); // Convert port from string to integer
     PubSubClient::setBufferSize(32000); // Set buffer size for large MQTT packets
-    PubSubClient::setKeepAlive(60); // Keep-alive interval for connection
-    PubSubClient::setSocketTimeout(60); // Socket timeout in seconds
+    PubSubClient::setKeepAlive(5); // Keep-alive interval for connection
+    PubSubClient::setSocketTimeout(1); // Socket timeout in seconds
   
     
     mqtt_user = String(user);

@@ -48,7 +48,21 @@ void printHelp() {
     Serial.println("  hmi [args]               - HMI display configuration commands");
     Serial.println("  modbus [args]            - Modbus device management commands");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
-    Serial.println("  file [args]              - File system commands");
+    Serial.println("");
+    Serial.println("File System Commands:");
+    Serial.println("  ls [path]                - List directory contents");
+    Serial.println("  cd <path>                - Change directory");
+    Serial.println("  pwd                      - Print working directory");
+    Serial.println("  mkdir <path>             - Create directory");
+    Serial.println("  cat <file>               - Display file contents");
+    Serial.println("  rm <file>                - Remove file");
+    Serial.println("  touch <file>             - Create empty file");
+    Serial.println("  mv <src> <dst>           - Rename/move file");
+    Serial.println("  cp <src> <dst>           - Copy file");
+    Serial.println("  storage                  - Show storage information");
+    Serial.println("  tree [path]              - Tree view of directory");
+    Serial.println("");
+    Serial.println("System Commands:");
     Serial.println("  show                     - Show system status");
     Serial.println("  reboot                   - Reboot the device");
     Serial.println("  factory                  - Restore factory settings");
@@ -892,6 +906,49 @@ void executeCommand(String cmd, String args) {
     }
     else if (cmd == "file" || cmd == "fs") {
         handleFileCommand(args);
+    }
+    // Direct file system commands (without 'file' prefix)
+    else if (cmd == "ls" || cmd == "dir") {
+        handleFileCommand("ls " + args);
+    }
+    else if (cmd == "cd") {
+        handleFileCommand("cd " + args);
+    }
+    else if (cmd == "pwd") {
+        handleFileCommand("pwd");
+    }
+    else if (cmd == "mkdir") {
+        handleFileCommand("mkdir " + args);
+    }
+    else if (cmd == "rmdir") {
+        handleFileCommand("rmdir " + args);
+    }
+    else if (cmd == "cat") {
+        handleFileCommand("cat " + args);
+    }
+    else if (cmd == "rm") {
+        handleFileCommand("rm " + args);
+    }
+    else if (cmd == "touch") {
+        handleFileCommand("touch " + args);
+    }
+    else if (cmd == "mv") {
+        handleFileCommand("mv " + args);
+    }
+    else if (cmd == "cp") {
+        handleFileCommand("cp " + args);
+    }
+    else if (cmd == "storage") {
+        handleFileCommand("storage");
+    }
+    else if (cmd == "du") {
+        handleFileCommand("du " + args);
+    }
+    else if (cmd == "tree") {
+        handleFileCommand("tree " + args);
+    }
+    else if (cmd == "format") {
+        handleFileCommand("format");
     }
     else if (cmd == "show" || cmd == "reboot" || cmd == "factory") {
         handleSystemCommand(cmd, args);

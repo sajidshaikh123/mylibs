@@ -46,6 +46,11 @@ class MQTTPublisher {
             (*doc)["timestamp"] = rtc.getDateTime();
             send_flag = true;
         }
+        void setData(const char* key, uint32_t value) {
+            (*doc)[key] = value;
+            (*doc)["timestamp"] = rtc.getDateTime();
+            send_flag = true;
+        }
         
         void setData(const char* key, double value) {
             (*doc)[key] = value;

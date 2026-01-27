@@ -44,8 +44,8 @@
 #include "RTCManager.h"
 // #include "RTC_operation.h"
 
-
 RTCManager rtc(0);
+
 
 // #include "Filesystem.h"
 #include "FilesystemManager.h"
@@ -66,6 +66,10 @@ RTCManager rtc(0);
 #include "shift_timing.h"
 #include "mqtt_publisher.h"
 // #include "firmware_update.h"  // Moved to end because it depends on other libraries
+
+
+// Web configuration MUST be included BEFORE WiFi_manager to avoid HTTP method conflicts
+#include "web_configuration.h"
 
 // Helper function declarations for version info
 namespace IOTBoard {
@@ -140,12 +144,16 @@ FilesystemManager fsManagerFFat(FilesystemType::FFAT);
 
 MQTT_Lib mqtt_obj;
 
+unsigned long execution_timer = 0;
+
 
 // Explicitly call the default constructor
 PCF8574_Output outputExpander = PCF8574_Output(OUTPUT_ADDR, SCL_PIN, SDA_PIN);
 PCF8574_Input inputExpander = PCF8574_Input(INPUT_ADDR, SCL_PIN, SDA_PIN, INPUT_INTERRUPT);
 
 extern void inputISR();
+
+WebServer syncServer(80);
 
 std::function<void(char*, uint8_t*, unsigned int)> mqtt_callback = nullptr;
 
@@ -173,6 +181,16 @@ void mqtt_setcallback(std::function<void(char*, uint8_t*, unsigned int)> callbac
 {
     mqtt_callback = callback;
 }
+
+void setupSyncWebServer() {
+    syncServer.on("/", HTTP_GET, []() {
+        syncServer.send(200, "text/html", "<h1>Ethernet Web Server Working!</h1>");
+    });
+    
+    syncServer.begin();
+    Serial.println("[Sync Web] Server started");
+}
+
 
 void boardinit(){
 
@@ -316,13 +334,31 @@ void boardinit(){
         mqtt_obj.setCallback(mqttcallbackmain);
         mqtt_obj.setMacAddress(mac_str);
     }
+
+    // Don't start web servers here - start them after network is ready
+    // setupWebServer(); 
+    // setupSyncWebServer();
     
 }
+
+
 
 
 void boardloop(){
 
     handleSerialCommands();
+    
+    // Web server handling - only use sync server for Ethernet
+    static bool syncServerStarted = false;
+    if(ethManager.status() == 1 && !syncServerStarted) {
+        syncServerStarted = true;
+        setupSyncWebServer();
+        Serial.println("[Web] Sync server started for Ethernet");
+    }
+    if(syncServerStarted) {
+        syncServer.handleClient();
+    }
+    
     if(onesecloop.ontime()){
         // Place 1-second interval tasks here
         if (ethManager.status() == 1){
@@ -343,13 +379,23 @@ void boardloop(){
         }
     }
 
+    // handleWebServer();  // Don't use AsyncWebServer with Ethernet
+    // syncServer.handleClient();  // Moved to top
+
     if(ms_100loop.ontime()){
         // Place 100-millisecond interval tasks here
         if (conn_status > 0 || wifi_connected){
+            execution_timer = millis();
             mqtt_obj.loop();
+            if(millis() - execution_timer > 500){
+                Serial.print("⚠ Warning: MQTT loop execution time exceeded 500ms: ");
+                Serial.print(millis() - execution_timer);
+                Serial.println(" ms");
+            }
             mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
         }
         if(wifiPref.getBool("enabled", false) ){
+            execution_timer = millis();
             if(WiFi.status() == WL_CONNECTED ){
                 if(wifi_connected == false){
                     wifi_connected = true;
@@ -360,6 +406,11 @@ void boardloop(){
                 }
             }else{
                 wifi_connected = false;
+            }
+            if(millis() - execution_timer > 500){
+                Serial.print("⚠ Warning: WiFi loop execution time exceeded 500ms: ");
+                Serial.print(millis() - execution_timer);
+                Serial.println(" ms");
             }
         }
     }

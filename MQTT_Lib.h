@@ -3,8 +3,8 @@
 #define MQTT_LIB_H
 
 #include <Arduino.h>
-#include <MQTTPubSubClient.h>
-// #include <PubSubClient.h>
+// #include <MQTTPubSubClient.h>
+#include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <map>
 
