@@ -3,5 +3,6 @@
         "initializer_list": "cpp",
         "xtree": "cpp",
         "xutility": "cpp"
-    }
+    },
+    "C_Cpp.default.compilerPath": "C:/Users/hinab/AppData/Local/Arduino15/packages/esp32/tools/esp-x32/2511/bin/xtensa-esp32s3-elf-g++"
 }

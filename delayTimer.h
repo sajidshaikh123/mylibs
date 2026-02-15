@@ -55,6 +55,10 @@ class DelayTimer {
       lastTrigger = millis();
       firstRun = true;
     }
+
+    uint32_t getTimer() {
+      return interval;
+    }
     
     void resetTimer(){
       lastTrigger = millis();

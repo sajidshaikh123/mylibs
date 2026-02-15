@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../.."
+		},
+		{
+			"path": "E:/Embedsol/Yearly Data/2025-26/Test Code/Nodejs/OPCUA/opcua-client"
+		},
+		{
+			"path": "E:/Embedsol/Yearly Data/2025-26/Test Code/Nodejs/OPCUA/opcua-server"
+		}
+	],
+	"settings": {}
+}

@@ -1,5 +1,6 @@
 #include <Adafruit_NeoPixel.h>
 #include "pindefinition.h"
+#include "esp_task_wdt.h"
 
 Adafruit_NeoPixel rgb_light(1,RGB_LED_PIN,NEO_GRB + NEO_KHZ800);
 
@@ -24,6 +25,8 @@ void pixelInit(){
     // rgb_light.setPin(RGB_LED_PIN);
     // rgb_light.updateLength(1);
     // rgb_light.updateType(NEO_BRG + NEO_KHZ800);
+    // Watchdog is temporarily disabled during this function call
+    // Do not call esp_task_wdt_reset() here
     rgb_light.begin(); 
     rgb_light.setBrightness(50);
     rgb_light.clear();

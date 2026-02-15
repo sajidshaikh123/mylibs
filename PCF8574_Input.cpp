@@ -11,6 +11,7 @@ PCF8574_Input::PCF8574_Input()
 bool PCF8574_Input::begin() {
     Wire.setPins(sdaPin,sclPin);
     Wire.begin(sdaPin, sclPin);
+    Wire.setTimeOut(50); // Set 50ms I2C timeout to prevent blocking
     if (pcf.begin(0xFF)) {
         status = true;
     } else {
@@ -21,11 +22,34 @@ bool PCF8574_Input::begin() {
 }
 
 int16_t PCF8574_Input::readInputs() {
-    if(status){
-        return pcf.read8();
-    }else{
-            return -1;
+    if(!status){
+        return -1;
     }
+    
+    yield(); // Feed watchdog before I2C operation
+    
+    // Add timeout protection
+    unsigned long startTime = millis();
+    int16_t result = -1;
+    
+    // Try to read with timeout check
+    Wire.beginTransmission(INPUT_ADDR);
+    if (Wire.endTransmission() == 0) {
+        // Device responded, do the actual read
+        result = pcf.read8();
+    } else {
+        // Device not responding
+        Serial.println("[PCF8574] Device not responding");
+    }
+    
+    // Check if operation took too long
+    if (millis() - startTime > 100) {
+        Serial.println("[PCF8574] Read timeout");
+        result = -1;
+    }
+    
+    yield(); // Feed watchdog after I2C operation
+    return result;
 }
 
 bool PCF8574_Input::inputChanged() {

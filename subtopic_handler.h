@@ -14,7 +14,7 @@ extern DynamicJsonDocument subtopic;
 // Load subtopic data from Preferences to JSON
 void loadSubtopicFromPreferences() {
     subtopicsPref.begin("subtopics", true);
-    
+    subtopic.clear();
     subtopic["company_name"] = subtopicsPref.getString("company", "embedsol");
     subtopic["location"] = subtopicsPref.getString("location", "bhosari");
     subtopic["department"] = subtopicsPref.getString("department", "iiot");

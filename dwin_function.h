@@ -1,6 +1,6 @@
 
 #include <dwindisplay.h>
-#include "dwin_res.h"
+// #include "dwin_res.h"
 
 #define DWIN_READ 0X83
 
@@ -24,12 +24,15 @@ volatile uint8_t dwin_rec_flag = 0;
 
 void dwinLoop() {
   while (1 == upload_flag) {
+    yield(); // Feed watchdog during upload mode
     while (HMI.available()) {
       Serial.write(HMI.read());
+      yield(); // Feed watchdog while reading from HMI
     }
 
     while (Serial.available()) {
       HMI.write(Serial.read());
+      yield(); // Feed watchdog while writing to HMI
     }
   } 
   if(0 == upload_flag){
@@ -37,16 +40,23 @@ void dwinLoop() {
       char ch = HMI.read();
       //Serial.write(ch);
       if (ch == 0X5A) {
-        delay(1);
-        ch = HMI.read();
+        yield(); // Feed watchdog instead of delay
+        if (HMI.available()) ch = HMI.read();
         if (ch == 0XA5) {
-          delay(1);
-          uint8_t size = HMI.read();
-          uint16_t index = 0;
-          while (size--) {
-            dwin_input[index++] = HMI.read();
+          yield(); // Feed watchdog instead of delay
+          if (HMI.available()) {
+            uint8_t size = HMI.read();
+            uint16_t index = 0;
+            unsigned long timeout = millis();
+            while (size-- && (millis() - timeout < 100)) { // Add timeout protection
+              if (HMI.available()) {
+                dwin_input[index++] = HMI.read();
+                timeout = millis(); // Reset timeout on successful read
+              }
+              yield(); // Feed watchdog while reading
+            }
+            dwin_rec_flag = size;
           }
-          dwin_rec_flag = size;
         }
       }
     }

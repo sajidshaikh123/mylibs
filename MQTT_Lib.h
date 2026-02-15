@@ -7,10 +7,13 @@
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <map>
+#include <Preferences.h>
 
 // Define reconnect and loop intervals
 #define MQTT_RECONNECT_INTERVAL 5000  // Time interval for MQTT reconnect attempts (in ms)
 #define MQTT_LOOP_INTERVAL 50          // Time interval for calling the loop function (in ms)
+
+extern Preferences subtopicsPref;
 
 class MQTT_Lib : public PubSubClient {
 public:
@@ -30,7 +33,13 @@ public:
     String getMacTopic(String request);
 
 private:
-    DynamicJsonDocument subtopic{300};  // inline initialization
+    
+
+    String cached_company ="";
+    String cached_location ="";
+    String cached_department ="";
+    String cached_line ="";
+    String cached_machine ="";
 
     String macAddress = "00:00:00:00:00:00"; 
     String sub_to = "+";  

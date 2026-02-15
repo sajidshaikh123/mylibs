@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..\\..,..\\..\\..,..\\..,..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32s3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=dio,FlashSize=16M,PartitionScheme=fatflash,DebugLevel=none,PSRAM=opi,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default,ZigbeeMode=default",
+  "hardwareFolders": "C:\\Users\\hinab\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.0,C:\\Users\\hinab\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.0",
+  "otherLibrariesFolders": "C:\\Users\\hinab\\OneDrive\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\hinab\\OneDrive\\Documents\\Arduino\\libraries\\mylibs\\examples\\opcua_server_example"
+}

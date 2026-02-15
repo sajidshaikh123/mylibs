@@ -1,0 +1,64 @@
+07:30:44.231 | DiscoveryWidget    |                                | Adding Server Embedsol Test OPC UA Server with URL opc.tcp://localhost:4840/UA/EmbedsolServer
+07:30:46.890 | DiscoveryWidget    |                                | Discovery FindServers on opc.tcp://192.168.1.4:4840 failed (BadEndOfStream)
+07:30:46.907 | DiscoveryWidget    |                                | Discovery GetEndpoints on opc.tcp://192.168.1.4:4840 failed (BadCommunicationError)
+07:30:57.597 | DiscoveryWidget    |                                | Adding Server Embedsol Test OPC UA Server with URL opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:00.540 | DiscoveryWidget    |                                | Discovery FindServers on opc.tcp://192.168.1.4:4840 failed (BadEndOfStream)
+07:31:00.556 | DiscoveryWidget    |                                | Discovery GetEndpoints on opc.tcp://192.168.1.4:4840 failed (BadCommunicationError)
+07:31:29.259 | DiscoveryWidget    |                                | Adding Server Embedsol Test OPC UA Server with URL opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:33.022 | DiscoveryWidget    |                                | Adding Url opc.tcp://localhost:4840/UA/EmbedsolServer
+07:31:54.800 | Server Node        | Embedsol Test OPC UA Server... | Endpoint: 'opc.tcp://localhost:4840/UA/EmbedsolServer'
+07:31:54.800 | Server Node        | Embedsol Test OPC UA Server... | Security policy: 'http://opcfoundation.org/UA/SecurityPolicy#None'
+07:31:54.800 | Server Node        | Embedsol Test OPC UA Server... | ApplicationUri: 'urn:Sajid:EmbedsolOPCUAServer'
+07:31:54.800 | Server Node        | Embedsol Test OPC UA Server... | Used UserTokenType: Anonymous
+07:31:55.200 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Registered for ModelChangeEvents
+07:31:55.200 | Server Node        | Embedsol Test OPC UA Server... | Connection status of server 'Embedsol Test OPC UA Server@localhost' changed to 'Connected'.
+07:31:55.214 | Server Node        | Embedsol Test OPC UA Server... | Revised values: SessionTimeout=1200000, SecureChannelLifetime=600000
+07:31:55.218 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'i=84' succeeded.
+07:31:55.226 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'i=85' succeeded.
+07:33:24.741 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'i=87' succeeded.
+07:33:26.329 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'i=86' succeeded.
+07:33:29.888 | Attribute Plugin   | Embedsol Test OPC UA Server... | Read attributes of node 'NS0|Numeric|90' succeeded [ret = Good].
+07:33:29.891 | Reference Plugin   | Embedsol Test OPC UA Server... | Browse succeeded.
+07:33:38.820 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'ns=1;s=EmbedsolDevices' succeeded.
+07:33:52.070 | Attribute Plugin   | Embedsol Test OPC UA Server... | Read attributes of node 'NS1|String|Temperature' succeeded [ret = Good].
+07:33:52.086 | Reference Plugin   | Embedsol Test OPC UA Server... | Browse succeeded.
+07:33:53.711 | AddressSpaceModel  | Embedsol Test OPC UA Server... | Browse on node 'ns=1;s=Temperature' succeeded.
+07:33:55.394 | AddressSpaceModel  | Embedsol Test OPC UA Server... | QascAddressSpaceModel::mimeData
+07:33:55.740 | DA Plugin          |                                | QascDaModel::dropMimeData
+07:33:55.740 | DA Plugin          | Embedsol Test OPC UA Server... | No subscription available for ServerId 5
+07:33:55.740 | DA Plugin          | Embedsol Test OPC UA Server... | Creating new subscription: ClientHandle=0, PublishingEnable=1, LifeTimeCount=2400, MaxKeepAliveCount=10, Priority=0, PublishingInterval=500, MaxNotificationsPerPublish=0
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | CreateSubscription succeeded [ret = Good]
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | Revised values: LifeTimeCount=2400, MaxKeepAliveCount=10, Priority=0, PublishingInterval=500, SubscriptionId=62235
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | Created subscription for ServerId 5
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|Temperature]: SamplingInterval=250, QueueSize=1, DiscardOldest=1, ClientHandle=1
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | CreateMonitoredItems succeeded [ret = Good]
+07:33:55.772 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|Temperature] succeeded : RevisedSamplingInterval=1000, RevisedQueueSize=1, MonitoredItemId=61912 [ret = Good]
+07:34:25.079 | DA Plugin          | Embedsol Test OPC UA Server... | DeleteMonitoredItems succeeded [ret = Good]
+07:34:25.079 | DA Plugin          | Embedsol Test OPC UA Server... | Item 'NS1|String|Temperature' succeeded [ret = Good]
+07:34:25.099 | DA Plugin          | Embedsol Test OPC UA Server... | Deleting subscription succeeded [ret = Good]
+07:34:26.761 | Attribute Plugin   | Embedsol Test OPC UA Server... | Read attributes of node 'NS1|String|MachineStatus' succeeded [ret = Good].
+07:34:26.761 | Reference Plugin   | Embedsol Test OPC UA Server... | Browse succeeded.
+07:34:26.829 | AddressSpaceModel  | Embedsol Test OPC UA Server... | QascAddressSpaceModel::mimeData
+07:34:26.997 | DA Plugin          |                                | QascDaModel::dropMimeData
+07:34:26.997 | DA Plugin          | Embedsol Test OPC UA Server... | No subscription available for ServerId 5
+07:34:26.997 | DA Plugin          | Embedsol Test OPC UA Server... | Creating new subscription: ClientHandle=1, PublishingEnable=1, LifeTimeCount=2400, MaxKeepAliveCount=10, Priority=0, PublishingInterval=500, MaxNotificationsPerPublish=0
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | CreateSubscription succeeded [ret = Good]
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | Revised values: LifeTimeCount=2400, MaxKeepAliveCount=10, Priority=0, PublishingInterval=500, SubscriptionId=62236
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | Created subscription for ServerId 5
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|MachineStatus]: SamplingInterval=250, QueueSize=1, DiscardOldest=1, ClientHandle=3
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | CreateMonitoredItems succeeded [ret = Good]
+07:34:27.034 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|MachineStatus] succeeded : RevisedSamplingInterval=1000, RevisedQueueSize=1, MonitoredItemId=61913 [ret = Good]
+07:34:32.236 | Attribute Plugin   | Embedsol Test OPC UA Server... | Read attributes of node 'NS1|String|Counter' succeeded [ret = Good].
+07:34:32.238 | Reference Plugin   | Embedsol Test OPC UA Server... | Browse succeeded.
+07:34:32.288 | AddressSpaceModel  | Embedsol Test OPC UA Server... | QascAddressSpaceModel::mimeData
+07:34:32.555 | DA Plugin          |                                | QascDaModel::dropMimeData
+07:34:32.555 | DA Plugin          | Embedsol Test OPC UA Server... | Found existing subscription for ServerId 5
+07:34:32.555 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|Counter]: SamplingInterval=250, QueueSize=1, DiscardOldest=1, ClientHandle=5
+07:34:32.558 | DA Plugin          | Embedsol Test OPC UA Server... | CreateMonitoredItems succeeded [ret = Good]
+07:34:32.558 | DA Plugin          | Embedsol Test OPC UA Server... | Item [NS1|String|Counter] succeeded : RevisedSamplingInterval=1000, RevisedQueueSize=1, MonitoredItemId=61914 [ret = Good]

@@ -78,11 +78,13 @@ class MQTTPublisher {
 
         void loop() {
             if (send_flag && mqttClient->connectionStatus() == MQTT_CONNECTED) {
+                yield(); // Feed watchdog before MQTT operations
+                String fullTopic = mqttClient->getTopic(topic); // Call getTopic only once
                 String payload;
                 serializeJson(*doc, payload);
-                // Serial.println("[MQTT PUBLISH] Topic: " + String(mqtt_obj.getTopic(topic)) + " Payload: " + payload);
-                send_flag = !mqttClient->publish(mqttClient->getTopic(topic).c_str(), payload.c_str(), retained);
-                
+                Serial.println("[MQTT PUBLISH] Topic: " + fullTopic);
+                send_flag = !mqttClient->publish(fullTopic.c_str(), payload.c_str(), retained);
+                yield(); // Feed watchdog after MQTT operations
             }
         }
 };

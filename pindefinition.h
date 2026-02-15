@@ -18,6 +18,12 @@
         #define HX711_DOUT  10
         #define  HX711_SCK  11
 
+        #define  TX2_PIN    35
+        #define  RX2_PIN    17
+
+        #define DWIN_TX_PIN 21
+        #define DWIN_RX_PIN 20
+
     #elif CONFIG_IDF_TARGET_ESP32S3
         #define TRIGGER_PIN 0 // ESP32-S3 
         #define SCL_PIN 2

@@ -8,6 +8,9 @@
 #include "serial_file_handler.h"
 #include "serial_mqtt_handler.h"
 #include "subtopic_handler.h"
+#include "tcp_modbus_simple.h"
+
+extern dwindisplay HMI;
 
 #define DEBUG_MODE 1
 #define DEBUG_SERIAL        Serial  // Serial port for debug output
@@ -27,6 +30,8 @@ extern Preferences wifiPref;
 extern Preferences ethernetPref;
 extern Preferences mqttPref;
 extern Preferences hmiPref;
+extern Preferences tcpModbusPref;
+extern Preferences settingsPref;
 
 std::function<void(String cmd, String args)> serial_processcallback = nullptr;
 
@@ -46,7 +51,7 @@ void printHelp() {
     Serial.println("  mqtt [args]              - MQTT configuration commands");
     Serial.println("  subtopic [args]          - Subtopic configuration commands");
     Serial.println("  hmi [args]               - HMI display configuration commands");
-    Serial.println("  modbus [args]            - Modbus device management commands");
+    Serial.println("  tcpmodbus [args]            - Modbus device management commands");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
     Serial.println("");
     Serial.println("File System Commands:");
@@ -61,6 +66,10 @@ void printHelp() {
     Serial.println("  cp <src> <dst>           - Copy file");
     Serial.println("  storage                  - Show storage information");
     Serial.println("  tree [path]              - Tree view of directory");
+    Serial.println("  format                   - Format filesystem (WARNING: erases all data)");
+    Serial.println("");
+    Serial.println("Settings Commands:");
+    Serial.println("  settings [args]          - Board settings (fs, input, output)");
     Serial.println("");
     Serial.println("System Commands:");
     Serial.println("  show                     - Show system status");
@@ -122,9 +131,14 @@ void printHMIHelp() {
     Serial.println("  hmi enable               - Enable HMI display");
     Serial.println("  hmi upload               - Upload HMI firmware");
     Serial.println("  hmi disable              - Disable HMI display");
+    Serial.println("  hmi write <addr> <value>  - Write number to VP address");
+    Serial.println("  hmi text <addr> <string>  - Write text string to VP address");
+    Serial.println("  hmi page <page_no>        - Switch to page number");
+    Serial.println("  hmi reset                - Reset HMI display");
     Serial.println("  hmi status               - Show HMI status");
     Serial.println("  hmi show                 - Show saved config");
-    Serial.println("Note: Changes require device reboot to take effect");
+    Serial.println("  Address format: 0x5000 or decimal 20480");
+    Serial.println("Note: enable/disable changes require device reboot");
 }
     
         
@@ -654,11 +668,59 @@ void handleHMICommand(String args) {
         
         Serial.println("[HMI] ✓ Disabled (will not initialize on next boot)");
         Serial.println("[HMI] Please reboot the device for changes to take effect");
+    }else if (subCmd == "write") {
+        // Parse: hmi write <addr> <value>
+        // subArgs = "0x5000 1"
+        int sepIdx = subArgs.indexOf(' ');
+        if (sepIdx <= 0) {
+            Serial.println("[HMI] Usage: hmi write <addr> <value>");
+            Serial.println("Example: hmi write 0x5000 1");
+            return;
+        }
+        String addrStr = subArgs.substring(0, sepIdx);
+        String valStr = subArgs.substring(sepIdx + 1);
+        valStr.trim();
+        
+        uint16_t addr = (uint16_t)strtoul(addrStr.c_str(), NULL, 0);
+        uint16_t val = (uint16_t)strtoul(valStr.c_str(), NULL, 0);
+        
+        HMI.Write_Number(addr, val);
+        Serial.printf("[HMI] Written %u (0x%04X) to VP 0x%04X\n", val, val, addr);
+    }
+    else if (subCmd == "text" || subCmd == "string") {
+        // Parse: hmi text <addr> <string>
+        int sepIdx = subArgs.indexOf(' ');
+        if (sepIdx <= 0) {
+            Serial.println("[HMI] Usage: hmi text <addr> <string>");
+            Serial.println("Example: hmi text 0x5100 Hello World");
+            return;
+        }
+        String addrStr = subArgs.substring(0, sepIdx);
+        String textStr = subArgs.substring(sepIdx + 1);
+        textStr.trim();
+        
+        uint16_t addr = (uint16_t)strtoul(addrStr.c_str(), NULL, 0);
+        
+        HMI.Write_UString(addr, textStr);
+        Serial.printf("[HMI] Written \"%s\" to VP 0x%04X\n", textStr.c_str(), addr);
+    }
+    else if (subCmd == "page") {
+        if (subArgs.length() == 0) {
+            Serial.println("[HMI] Usage: hmi page <page_number>");
+            return;
+        }
+        uint16_t page = (uint16_t)strtoul(subArgs.c_str(), NULL, 0);
+        HMI.showPage(page);
+        Serial.printf("[HMI] Switched to page %u\n", page);
+    }
+    else if (subCmd == "reset") {
+        HMI.reset();
+        Serial.println("[HMI] Reset command sent");
     }
     else if (subCmd == "status") {
         Serial.println("=== HMI Status ===");
         
-        bool enabled = hmiPref.getBool("enabled", true);
+        bool enabled = hmiPref.getBool("enabled", false);
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         Serial.printf("Baud Rate: 115200\n");
         Serial.printf("Config: SERIAL_8N1\n");
@@ -668,7 +730,7 @@ void handleHMICommand(String args) {
     else if (subCmd == "show") {
         Serial.println("=== Saved HMI Configuration ===");
         
-        bool enabled = hmiPref.getBool("enabled", true);
+        bool enabled = hmiPref.getBool("enabled", false);
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         
         Serial.println("===============================");
@@ -775,6 +837,116 @@ void handleRTCCommand(String args) {
     else {
         Serial.printf("[RTC] ✗ Unknown command: %s\n", subCmd.c_str());
         Serial.println("[RTC] Type 'rtc help' for available commands");
+    }
+}
+
+
+// ==================== SETTINGS COMMAND HANDLER ====================
+void printSettingsHelp() {
+    Serial.println("========= Settings Commands ==========");
+    Serial.println("  settings show            - Show all settings");
+    Serial.println("  settings fs enable       - Enable filesystem (FFat)");
+    Serial.println("  settings fs disable      - Disable filesystem");
+    Serial.println("  settings input enable    - Enable PCF8574 input expander");
+    Serial.println("  settings input disable   - Disable PCF8574 input expander");
+    Serial.println("  settings output enable   - Enable PCF8574 output expander");
+    Serial.println("  settings output disable  - Disable PCF8574 output expander");
+    Serial.println("Note: Changes require device reboot to take effect");
+}
+
+void handleSettingsCommand(String args) {
+    args.trim();
+
+    int spaceIndex = args.indexOf(' ');
+    String subCmd, subArgs;
+
+    if (spaceIndex > 0) {
+        subCmd = args.substring(0, spaceIndex);
+        subArgs = args.substring(spaceIndex + 1);
+        subArgs.trim();
+    } else {
+        subCmd = args;
+        subArgs = "";
+    }
+
+    subCmd.toLowerCase();
+    subArgs.toLowerCase();
+
+    if (subCmd == "" || subCmd == "help" || subCmd == "?") {
+        printSettingsHelp();
+    }
+    else if (subCmd == "show" || subCmd == "status") {
+        settingsPref.end();
+        settingsPref.begin("settings", true);
+        Serial.println("=== Board Settings ===");
+        Serial.printf("  Filesystem (fs):     %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
+        Serial.printf("  Input Expander:      %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
+        Serial.printf("  Output Expander:     %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
+        Serial.println("======================");
+    }
+    else if (subCmd == "fs" || subCmd == "filesystem") {
+        if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("fs_enabled", true);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Filesystem enabled (reboot to apply)");
+        } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("fs_enabled", false);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Filesystem disabled (reboot to apply)");
+        } else {
+            Serial.printf("[Settings] Filesystem is: %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
+            Serial.println("Usage: settings fs enable|disable");
+        }
+    }
+    else if (subCmd == "input") {
+        if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("input_enabled", true);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Input expander enabled (reboot to apply)");
+        } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("input_enabled", false);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Input expander disabled (reboot to apply)");
+        } else {
+            Serial.printf("[Settings] Input expander is: %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
+            Serial.println("Usage: settings input enable|disable");
+        }
+    }
+    else if (subCmd == "output") {
+        if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("output_enabled", true);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Output expander enabled (reboot to apply)");
+        } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("output_enabled", false);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] Output expander disabled (reboot to apply)");
+        } else {
+            Serial.printf("[Settings] Output expander is: %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
+            Serial.println("Usage: settings output enable|disable");
+        }
+    }
+    else {
+        Serial.printf("[Settings] Unknown setting: %s\n", subCmd.c_str());
+        printSettingsHelp();
     }
 }
 
@@ -897,12 +1069,14 @@ void executeCommand(String cmd, String args) {
     else if (cmd == "hmi") {
         handleHMICommand(args);
     }
-    else if (cmd == "modbus") {
-        DEBUG_PRINT("modbus");
-        //handleModbusCommand(args);
+    else if (cmd == "tcpmodbus") {
+        handleTCPModbusCommand(args);
     }
     else if (cmd == "rtc") {
         handleRTCCommand(args);
+    }
+    else if (cmd == "settings" || cmd == "setting" || cmd == "set") {
+        handleSettingsCommand(args);
     }
     else if (cmd == "file" || cmd == "fs") {
         handleFileCommand(args);
@@ -990,10 +1164,20 @@ void handleSerialCommands(){
         return;
     }
     if(Serial.available()){
-        String command = Serial.readStringUntil('\n');
+        // Use static buffer to avoid heap fragmentation
+        static char cmdBuffer[256];
+        size_t len = Serial.readBytesUntil('\n', cmdBuffer, sizeof(cmdBuffer) - 1);
+        cmdBuffer[len] = '\0'; // Null terminate
+        
+        // Clear any remaining characters
+        while(Serial.available() && Serial.read() != '\n');
+        
+        String command = String(cmdBuffer);
         command.trim();
 
-        parseSerialCommand(command);
+        if(command.length() > 0) {
+            parseSerialCommand(command);
+        }
 
         Serial.print("\n> ");
     }

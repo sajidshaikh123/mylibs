@@ -1,10 +1,99 @@
 #include "FilesystemManager.h"
 #include <Arduino.h>
+#include "esp_task_wdt.h"
 
 #define MMC_SCK 14 // Define the pin number for SCK
 #define MMC_MISO 12 // Define the pin number for MISO
 #define MMC_MOSI 13 // Define the pin number for MOSI
 #define MMC_CS 15 // Define the pin number for chip select (CS)
+
+// ========== Internal-RAM Stack Helper for FFat Operations ==========
+// On ESP32-S3 with PSRAM enabled (CONFIG_SPIRAM_USE_MALLOC=y), the Arduino
+// loopTask stack is allocated in PSRAM via heap_caps_malloc_default().
+// When FFat.begin() or FFat.format() trigger SPI flash I/O, the ESP-IDF flash
+// driver freezes the data cache. Since PSRAM is accessed through the data cache,
+// any stack variable not already cached becomes inaccessible — the MSPI bus is
+// busy with the flash transaction and can't service PSRAM cache misses.
+// This causes "Guru Meditation: Cache error / MMU entry fault".
+//
+// Solution: Run FFat flash operations on a dedicated FreeRTOS task whose stack
+// is explicitly allocated in internal SRAM (not PSRAM) using heap_caps_malloc
+// with MALLOC_CAP_INTERNAL. Internal SRAM is directly addressable without cache.
+
+#include "esp_heap_caps.h"
+
+static volatile bool _fsOpResult = false;
+static bool (*_fsOpFunc)() = nullptr;
+static SemaphoreHandle_t _fsOpDone = NULL;
+static TaskHandle_t _fsOpTaskHandle = NULL;
+
+static void fsOpRunner(void* param) {
+    if (_fsOpFunc) {
+        _fsOpResult = _fsOpFunc();
+    }
+    xSemaphoreGive(_fsOpDone);
+    vTaskSuspend(NULL);  // Suspend; calling task will delete us
+}
+
+// Static wrappers for FFat operations (used as function pointers)
+static bool _ffatBeginNoFormat() { return FFat.begin(false); }
+static bool _ffatFormat() { return FFat.format(); }
+
+bool FilesystemManager::execOnInternalStack(bool (*func)()) {
+    const size_t STACK_WORDS = 4096;  // 16KB stack in internal SRAM
+
+    // Allocate stack in INTERNAL RAM (critical: must NOT be in PSRAM)
+    StackType_t* stack = (StackType_t*)heap_caps_malloc(
+        STACK_WORDS * sizeof(StackType_t),
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    if (!stack) {
+        Serial.println("[FS] WARN: Cannot allocate internal RAM for task stack");
+        Serial.printf("[FS] Free internal: %u bytes\n",
+            heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+        return func();  // Fallback: run directly (works when PSRAM is disabled)
+    }
+
+    static StaticTask_t tcbBuffer;
+    _fsOpDone = xSemaphoreCreateBinary();
+    if (!_fsOpDone) {
+        heap_caps_free(stack);
+        return func();
+    }
+
+    _fsOpFunc = func;
+    _fsOpResult = false;
+
+    _fsOpTaskHandle = xTaskCreateStaticPinnedToCore(
+        fsOpRunner,
+        "fs_op",
+        STACK_WORDS,
+        NULL,
+        5,              // Above-normal priority
+        stack,
+        &tcbBuffer,
+        1               // Core 1 (same as loopTask)
+    );
+
+    if (!_fsOpTaskHandle) {
+        Serial.println("[FS] WARN: Task creation failed - running directly");
+        heap_caps_free(stack);
+        vSemaphoreDelete(_fsOpDone);
+        return func();
+    }
+
+    // Wait for operation to complete
+    xSemaphoreTake(_fsOpDone, portMAX_DELAY);
+
+    // Task suspended itself — safe to delete and free memory
+    vTaskDelete(_fsOpTaskHandle);
+    _fsOpTaskHandle = NULL;
+    vSemaphoreDelete(_fsOpDone);
+    _fsOpDone = NULL;
+    heap_caps_free(stack);
+
+    return _fsOpResult;
+}
 
 
 FilesystemManager::FilesystemManager() : activeFS(nullptr), currentFSType(FilesystemType::FFAT) {}
@@ -140,9 +229,17 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
     // Clear previous filesystem pointer
     activeFS = nullptr;
     
+    
     switch (fsType) {
-        case FilesystemType::FFAT:
-            if (FFat.begin(true)) {
+        case FilesystemType::FFAT: {
+            Serial.println("Attempting to mount FFat...");
+            yield();
+            delay(50);
+
+            // Run on internal-RAM stack task (prevents PSRAM + cache freeze crash)
+            bool mounted = execOnInternalStack(_ffatBeginNoFormat);
+
+            if (mounted) {
                 activeFS = &FFat;
                 currentFSType = FilesystemType::FFAT;
                 Serial.printf("FFat Total: %.2f MB\n", FFat.totalBytes() / (1024.0 * 1024.0));
@@ -150,19 +247,41 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 Serial.printf("FFat Free: %.2f MB\n", FFat.freeBytes() / (1024.0 * 1024.0));
                 FS_status = true;
                 return true;
-            } else {
-                Serial.println("FFat mount failed - attempting format...");
-                if (FFat.format(true) && FFat.begin(true)) {
+            }
+
+            Serial.println("FFat mount failed - partition may be unformatted.");
+            Serial.println("Attempting format...");
+            yield();
+            delay(100);
+
+            bool formatted = execOnInternalStack(_ffatFormat);
+
+            if (formatted) {
+                Serial.println("FFat format successful! Mounting...");
+                yield();
+                delay(50);
+
+                mounted = execOnInternalStack(_ffatBeginNoFormat);
+
+                if (mounted) {
                     activeFS = &FFat;
                     currentFSType = FilesystemType::FFAT;
-                    Serial.println("FFat formatted and mounted successfully");
+                    Serial.println("FFat mounted after format.");
                     FS_status = true;
                     return true;
                 }
+                Serial.println("FFat mount after format failed.");
+            } else {
+                Serial.println("FFat format failed.");
             }
+
+            Serial.println("FFat unavailable. Continuing without filesystem.");
             break;
+        }
             
-        case FilesystemType::SPIFFS:
+        case FilesystemType::SPIFFS: {
+            yield();
+            delay(50);
             if (SPIFFS.begin(true)) {
                 activeFS = &SPIFFS;
                 currentFSType = FilesystemType::SPIFFS;
@@ -173,10 +292,12 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 return true;
             }
             break;
+        }
             
-        case FilesystemType::SD_CARD:
+        case FilesystemType::SD_CARD: {
+            yield();
             spi.begin(MMC_SCK, MMC_MISO, MMC_MOSI, MMC_CS);
-
+            yield();
             delay(100);
             if (SD.begin(MMC_CS, spi, 8000000, "/sd", 5, true)) {
                 activeFS = &SD;
@@ -190,6 +311,7 @@ bool FilesystemManager::mountFilesystem(FilesystemType fsType) {
                 Serial.println("SD Card mount failed");
             }
             break;
+        }
     }
     FS_status = false;
     return false;
@@ -450,14 +572,21 @@ bool FilesystemManager::format(bool quickFormat) {
     bool success = false;
     
     switch (currentFSType) {
-        case FilesystemType::FFAT:
+        case FilesystemType::FFAT: {
             Serial.println("Formatting FFat filesystem...");
             FFat.end(); // Unmount before formatting
-            success = FFat.format(!quickFormat); // true for full format, false for quick
+            yield();
+            delay(100);
+
+            success = execOnInternalStack(_ffatFormat);
+            yield();
+            delay(100);
+
             if (success) {
-                success = FFat.begin(true); // Remount after formatting
+                success = execOnInternalStack(_ffatBeginNoFormat);
             }
             break;
+        }
             
         case FilesystemType::SPIFFS:
             Serial.println("Formatting SPIFFS filesystem...");
@@ -497,6 +626,44 @@ bool FilesystemManager::format(bool quickFormat) {
     }
 
     return success;
+}
+
+bool FilesystemManager::safeFormatFFat() {
+    Serial.println("=== SAFE FFat FORMAT ===");
+
+    // Unmount if currently mounted
+    if (currentFSType == FilesystemType::FFAT && activeFS != nullptr) {
+        FFat.end();
+        activeFS = nullptr;
+        FS_status = false;
+    }
+
+    yield();
+    delay(100);
+
+    bool formatted = execOnInternalStack(_ffatFormat);
+
+    if (!formatted) {
+        Serial.println("FFat format failed.");
+        return false;
+    }
+
+    Serial.println("FFat formatted. Mounting...");
+    yield();
+    delay(100);
+
+    bool mounted = execOnInternalStack(_ffatBeginNoFormat);
+
+    if (mounted) {
+        activeFS = &FFat;
+        currentFSType = FilesystemType::FFAT;
+        FS_status = true;
+        Serial.println("FFat formatted and mounted successfully.");
+        return true;
+    }
+
+    Serial.println("FFat mount after format failed.");
+    return false;
 }
 
 bool FilesystemManager::readJSON(const String &path, DynamicJsonDocument &jsonDoc) {

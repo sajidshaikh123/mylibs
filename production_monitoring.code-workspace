@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"path": "../../../GitHub/Production-Monitoring/production_monitoring"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			".gitignore": "bat",
+			"chrono": "cpp",
+			"functional": "cpp",
+			"algorithm": "cpp"
+		}
+	}
+}

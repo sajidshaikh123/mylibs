@@ -23,7 +23,7 @@ public:
     fs::FS* getActiveFilesystem();
     bool isFilesystemMounted();
     void listDir(String dirname, uint8_t levels = 0);
-    String listDirStr(const String &dirname,int counter = 255);
+    String listDirStr(const String &dirname,int counter = 0);
     void createDir(const String &path);
     bool search(const String &path);
     void displayFile(const String &path);
@@ -34,6 +34,7 @@ public:
     bool deleteFile(const String &path);
     bool deleteDir(const String &path);
     bool format(bool quickFormat = true);
+    bool safeFormatFFat();  // Format FFat safely (ensure no flash-based ISRs active)
     bool readJSON(const String &path, DynamicJsonDocument &jsonDoc);
     bool readJSONOBJ(const String &path, DynamicJsonDocument *&jsonDoc);
     bool writeJSON(const String &path, const DynamicJsonDocument &jsonDoc);
@@ -46,4 +47,8 @@ private:
     FilesystemType currentFSType;
     bool FS_status = false;
     bool mountFilesystem(FilesystemType fsType);
+    
+    // Run FFat operation on a task with internal SRAM stack.
+    // Prevents PSRAM stack + SPI flash cache freeze = MMU fault on ESP32-S3.
+    static bool execOnInternalStack(bool (*func)());
 };
