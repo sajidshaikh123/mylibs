@@ -385,6 +385,16 @@ void publishPeripheralStatus() {
     connections["mqtt_transport"] = mqttTransport;
     connections["filesystem_ready"] = filesystemReady;
 
+    // Storage (if filesystem enabled)
+    if (filesystemReady) {
+        JsonObject storage = doc.createNestedObject("storage");
+        storage["type"] = "FFat";
+        storage["total_kb"] = FFat.totalBytes() / 1024;
+        storage["used_kb"] = FFat.usedBytes() / 1024;
+        storage["free_kb"] = (FFat.totalBytes() - FFat.usedBytes()) / 1024;
+        storage["used_pct"] = (FFat.totalBytes() > 0) ? (float)(FFat.usedBytes() * 100.0 / FFat.totalBytes()) : 0;
+    }
+
     // RTC
     JsonObject rtcInfo = doc.createNestedObject("rtc");
     rtcInfo["type"] = rtc.isExternalRTCAvailable() ? "external" : "internal";
