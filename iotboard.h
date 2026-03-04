@@ -153,7 +153,6 @@ EthernetClient ethClient;
 WiFiClient wifiClient;
 EthernetManager ethManager;
 
-Preferences subtopicsPref;
 Preferences wifiPref;
 Preferences ethernetPref;
 // Declare MQTT preferences
@@ -416,7 +415,7 @@ void boardinit(){
 
     Serial.begin(115200);
     Serial.setTimeout(300);
-    Serial.println("IIOT Gateway Board ");
+    Serial.println("IIOT Gateway Board");
     settingsPref.begin("settings", true); 
     
     // Configure watchdog timeout - increase to 10 seconds for network operations
@@ -571,8 +570,16 @@ void boardinit(){
             filesystemReady = false;
         }
         yield();
+    }else{
+        Serial.println("Filesystem disabled in preferences.");
     }
 
+
+    WiFi.mode(WIFI_STA);
+    delay(200); // Delay for 200 milliseconds
+    WiFi.macAddress(mac);
+    mac_str = WiFi.macAddress();
+    WiFi.disconnect(); // Ensure we're disconnected before starting MQTT
 
     
     // Just cache preferences, don't initialize WiFi yet
@@ -607,6 +614,7 @@ void boardinit(){
     }else{
         Serial.println("Ethernet not enabled in preferences.");
     }
+    ethernetPref.end();
     yield();
 
     Serial.println("Initializing MQTT...");
@@ -615,8 +623,6 @@ void boardinit(){
 
     // Load MQTT configuration
     mqttEnabled = mqttPref.getBool("enabled", false);
-    
-    
     
     yield();
     if(mqttEnabled){
@@ -640,12 +646,7 @@ void boardinit(){
         Serial.println("Initializing subtopic...");
         yield();
         // initSubtopic();
-        WiFi.mode(WIFI_STA);
-        delay(200); // Delay for 200 milliseconds
-        WiFi.macAddress(mac);
-        mac_str = WiFi.macAddress();
-        WiFi.disconnect(); // Ensure we're disconnected before starting MQTT
-
+        
         mqtt_obj.setsubscribeto("#");
 
         // mqtt_obj.setsubtopic(subtopic);
@@ -720,12 +721,94 @@ void boardloop(){
                 if (millis() - wifi_init_timer >= 500) {
                     String ssid = wifiPref.getString("ssid", "");
                     String password = wifiPref.getString("password", "");
-                    if (ssid.length() > 0 && password.length() > 0) {
-                        Serial.print("[WiFi] Connecting to: "); Serial.println(ssid);
-                        WiFi.begin(ssid.c_str(), password.c_str());
-                    } else {
-                        Serial.println("[WiFi] No valid credentials found.");
+                    bool useDHCP = wifiPref.getBool("dhcp", true);
+                    
+                    if (ssid.length() == 0) {
+                        Serial.println("[WiFi] ✗ No SSID configured - skipping connection.");
+                        wifi_init_state = 5; // Skip to done
+                        break;
                     }
+                    
+                    Serial.print("[WiFi] Connecting to: "); Serial.println(ssid);
+                    Serial.printf("[WiFi] Mode: %s\n", useDHCP ? "DHCP" : "Static IP");
+                    
+                    // Configure static IP if DHCP is disabled
+                    if (!useDHCP) {
+                        String ipStr = wifiPref.getString("ip", "");
+                        String gatewayStr = wifiPref.getString("gateway", "");
+                        String subnetStr = wifiPref.getString("subnet", "");
+                        String dnsStr = wifiPref.getString("dns", "");
+                        
+                        // Validate that IP address is configured
+                        if (ipStr.length() == 0) {
+                            Serial.println("[WiFi] ✗ Error: Static IP mode enabled but no IP address configured!");
+                            Serial.println("[WiFi] ✗ Use 'wifi ip <address>' to set IP or 'wifi dhcp' to enable DHCP.");
+                            Serial.println("[WiFi] ✗ Connection aborted.");
+                            wifi_init_state = 5; // Skip to done without connecting
+                            break;
+                        }
+                        
+                        IPAddress ip, gateway, subnet, dns;
+                        
+                        // Parse and validate IP address
+                        if (!ip.fromString(ipStr)) {
+                            Serial.printf("[WiFi] ✗ Error: Invalid IP address format: %s\n", ipStr.c_str());
+                            Serial.println("[WiFi] ✗ Connection aborted.");
+                            wifi_init_state = 5;
+                            break;
+                        }
+                        
+                        // Use defaults if not set, otherwise validate
+                        if (gatewayStr.length() > 0) {
+                            if (!gateway.fromString(gatewayStr)) {
+                                Serial.printf("[WiFi] ✗ Error: Invalid gateway format: %s\n", gatewayStr.c_str());
+                                Serial.println("[WiFi] ✗ Connection aborted.");
+                                wifi_init_state = 5;
+                                break;
+                            }
+                        } else {
+                            gateway = IPAddress(192, 168, 1, 1); // Default gateway
+                        }
+                        
+                        if (subnetStr.length() > 0) {
+                            if (!subnet.fromString(subnetStr)) {
+                                Serial.printf("[WiFi] ✗ Error: Invalid subnet mask format: %s\n", subnetStr.c_str());
+                                Serial.println("[WiFi] ✗ Connection aborted.");
+                                wifi_init_state = 5;
+                                break;
+                            }
+                        } else {
+                            subnet = IPAddress(255, 255, 255, 0); // Default subnet
+                        }
+                        
+                        if (dnsStr.length() > 0) {
+                            if (!dns.fromString(dnsStr)) {
+                                Serial.printf("[WiFi] ✗ Error: Invalid DNS format: %s\n", dnsStr.c_str());
+                                Serial.println("[WiFi] ✗ Connection aborted.");
+                                wifi_init_state = 5;
+                                break;
+                            }
+                        } else {
+                            dns = gateway; // Use gateway as DNS by default
+                        }
+                        
+                        // Apply static IP configuration
+                        if (!WiFi.config(ip, dns, gateway, subnet)) {
+                            Serial.println("[WiFi] ✗ Failed to configure static IP settings!");
+                            Serial.println("[WiFi] ✗ Connection aborted.");
+                            wifi_init_state = 5;
+                            break;
+                        }
+                        
+                        Serial.printf("[WiFi] Static IP configured:\n");
+                        Serial.printf("  IP:      %s\n", ip.toString().c_str());
+                        Serial.printf("  Gateway: %s\n", gateway.toString().c_str());
+                        Serial.printf("  Subnet:  %s\n", subnet.toString().c_str());
+                        Serial.printf("  DNS:     %s\n", dns.toString().c_str());
+                    }
+                    
+                    // Proceed with connection
+                    WiFi.begin(ssid.c_str(), password.c_str());
                     wifi_init_state = 4;
                     wifi_init_timer = millis();
                 }
@@ -849,6 +932,12 @@ void boardloop(){
                     Serial.println("[WiFi] ✓ Connected successfully!");
                     Serial.print("[WiFi] IP Address: ");
                     Serial.println(WiFi.localIP());
+
+                    setupWebServer(); 
+                    setupSyncWebServer();
+                    syncServerStarted = true;
+                    // setupSyncWebServer();
+                    Serial.println("[Web] Sync server started for WiFi");
 
                     if(mqttEnabled){
                         if(mqttTransport == "wifi" || mqttTransport == "auto"){

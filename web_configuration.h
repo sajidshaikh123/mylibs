@@ -30,8 +30,8 @@ extern Preferences hmiPref;
 extern RTCManager rtc;
 extern FilesystemManager fsManagerFFat;
 
-// Web server on port 80
-AsyncWebServer webServer(80);
+// Web server on port 8080
+AsyncWebServer webServer(8080);
 AsyncWebSocket ws("/ws");
 
 // Authentication credentials (store in preferences in production)
@@ -984,9 +984,9 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         function saveMQTTConfig() {
             const data = {
-                host: document.getElementById('mqttHost').value,
+                server: document.getElementById('mqttHost').value,
                 port: parseInt(document.getElementById('mqttPort').value),
-                user: document.getElementById('mqttUser').value,
+                username: document.getElementById('mqttUser').value,
                 password: document.getElementById('mqttPass').value
             };
             apiCall('/api/mqtt/config', 'POST', data);
@@ -1415,9 +1415,9 @@ const char index_html[] PROGMEM = R"rawliteral(
             // Load MQTT config
             const mqttConfig = await apiCall('/api/mqtt/config');
             if (mqttConfig.success) {
-                document.getElementById('mqttHost').value = mqttConfig.host || '';
+                document.getElementById('mqttHost').value = mqttConfig.server || '';
                 document.getElementById('mqttPort').value = mqttConfig.port || 1883;
-                document.getElementById('mqttUser').value = mqttConfig.user || '';
+                document.getElementById('mqttUser').value = mqttConfig.username || '';
             }
             
             // Load Subtopic config
@@ -1592,7 +1592,6 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
             return;
         }
         
-        ethernetPref.end();
         ethernetPref.begin("ethernet", false);
         
         if (doc.containsKey("enabled")) ethernetPref.putBool("enabled", doc["enabled"]);
@@ -1603,7 +1602,6 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
         if (doc.containsKey("dns")) ethernetPref.putString("dns", doc["dns"].as<String>());
         
         ethernetPref.end();
-        ethernetPref.begin("ethernet", true);
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"Ethernet config saved. Reconnect to apply.\"}");
     }
@@ -1614,12 +1612,17 @@ void handleMQTTConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     if (request->method() == HTTP_GET) {
+        // Reopen mqttPref in case it was closed
+    
+        mqttPref.begin("mqtt", true);
+        
         DynamicJsonDocument doc(512);
         doc["success"] = true;
-        doc["host"] = mqttPref.getString("host", "");
-        doc["port"] = mqttPref.getInt("port", 1883);
-        doc["user"] = mqttPref.getString("user", "");
-        
+        doc["server"] = mqttPref.getString("server", "");
+        doc["port"] = mqttPref.getUShort("port", 1883);
+        doc["username"] = mqttPref.getString("username", "");
+        doc["transport"] = mqttPref.getString("transport", "auto");
+        mqttPref.end();
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
@@ -1634,16 +1637,15 @@ void handleMQTTConfig(AsyncWebServerRequest *request) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         
-        if (doc.containsKey("host")) mqttPref.putString("host", doc["host"].as<String>());
-        if (doc.containsKey("port")) mqttPref.putInt("port", doc["port"]);
-        if (doc.containsKey("user")) mqttPref.putString("user", doc["user"].as<String>());
+        if (doc.containsKey("server")) mqttPref.putString("server", doc["server"].as<String>());
+        if (doc.containsKey("port")) mqttPref.putUShort("port", doc["port"].as<uint16_t>());
+        if (doc.containsKey("username")) mqttPref.putString("username", doc["username"].as<String>());
         if (doc.containsKey("password")) mqttPref.putString("password", doc["password"].as<String>());
+        if (doc.containsKey("transport")) mqttPref.putString("transport", doc["transport"].as<String>());
         
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"MQTT config saved\"}");
     }
@@ -1654,7 +1656,7 @@ void handleSubtopicConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     Preferences subPref;
-    subPref.begin("subtopic", request->method() == HTTP_POST ? false : true);
+    subPref.begin("subtopics", request->method() == HTTP_POST ? false : true);
     
     if (request->method() == HTTP_GET) {
         DynamicJsonDocument doc(512);
@@ -1687,8 +1689,6 @@ void handleSubtopicConfig(AsyncWebServerRequest *request) {
         if (doc.containsKey("line")) subPref.putString("line", doc["line"].as<String>());
         if (doc.containsKey("machine")) subPref.putString("machine", doc["machine"].as<String>());
         
-        subPref.end();
-        subPref.begin("subtopic", true);
         subPref.end();
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"Subtopic config saved\"}");
@@ -1783,12 +1783,10 @@ void handleFactoryReset(AsyncWebServerRequest *request) {
     wifiPref.clear();
     wifiPref.end();
     
-    ethernetPref.end();
     ethernetPref.begin("ethernet", false);
     ethernetPref.clear();
     ethernetPref.end();
     
-    mqttPref.end();
     mqttPref.begin("mqtt", false);
     mqttPref.clear();
     mqttPref.end();

@@ -53,20 +53,18 @@ void handleMQTTCommand(String args) {
         printMQTTHelp();
     }
     else if (subCmd == "enable") {
-        mqttPref.end();
+        
         mqttPref.begin("mqtt", false);
         mqttPref.putBool("enabled", true);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.println("[MQTT] ✓ Enabled (will connect on next boot)");
     }
     else if (subCmd == "disable") {
-        mqttPref.end();
+
         mqttPref.begin("mqtt", false);
         mqttPref.putBool("enabled", false);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.println("[MQTT] ✓ Disabled");
     }
@@ -85,11 +83,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putString("server", subArgs);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.printf("[MQTT] ✓ Server set to: %s\n", subArgs.c_str());
     }
@@ -107,11 +103,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putUShort("port", port);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.printf("[MQTT] ✓ Port set to: %d\n", port);
     }
@@ -127,11 +121,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putString("username", subArgs);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.printf("[MQTT] ✓ Username set to: %s\n", subArgs.c_str());
     }
@@ -147,11 +139,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putString("password", subArgs);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.println("[MQTT] ✓ Password saved");
     }
@@ -167,11 +157,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putString("clientid", subArgs);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.printf("[MQTT] ✓ Client ID set to: %s\n", subArgs.c_str());
     }
@@ -194,11 +182,9 @@ void handleMQTTCommand(String args) {
             return;
         }
         
-        mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.putString("transport", subArgs);
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.printf("[MQTT] ✓ Transport set to: %s\n", subArgs.c_str());
         
@@ -212,7 +198,7 @@ void handleMQTTCommand(String args) {
     }
     else if (subCmd == "status") {
         Serial.println("=== MQTT Status ===");
-        
+        mqttPref.begin("mqtt", true); 
         bool enabled = mqttPref.getBool("enabled", false);
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         
@@ -228,12 +214,12 @@ void handleMQTTCommand(String args) {
         } else {
             Serial.println("Server: Not configured");
         }
-        
+        mqttPref.end();
         Serial.println("==================");
     }
     else if (subCmd == "show") {
         Serial.println("=== Saved MQTT Configuration ===");
-        
+        mqttPref.begin("mqtt", true); 
         bool enabled = mqttPref.getBool("enabled", false);
         String server = mqttPref.getString("server", "");
         uint16_t port = mqttPref.getUShort("port", 1883);
@@ -250,20 +236,20 @@ void handleMQTTCommand(String args) {
         Serial.printf("Client ID: %s\n", clientid.length() > 0 ? clientid.c_str() : "(not set)");
         Serial.printf("Transport: %s\n", transport.c_str());
         Serial.println("================================");
-    }
+    }   mqttPref.end();
     else if (subCmd == "clear") {
         mqttPref.end();
         mqttPref.begin("mqtt", false);
         mqttPref.clear();
         mqttPref.end();
-        mqttPref.begin("mqtt", true);
         
         Serial.println("[MQTT] ✓ Configuration cleared");
     }
     else if (subCmd == "test") {
+        mqttPref.begin("mqtt", true); 
         String server = mqttPref.getString("server", "");
         uint16_t port = mqttPref.getUShort("port", 1883);
-        
+        mqttPref.end();
         if (server.length() == 0) {
             Serial.println("[MQTT] ✗ Error: Server not configured");
             Serial.println("Use: mqtt server <ip_or_hostname>");

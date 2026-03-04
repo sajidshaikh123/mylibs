@@ -6,6 +6,7 @@
 // Declare external rtc instance from iotboard.h
 extern RTCManager rtc;
 
+Preferences subtopicsPref;
 
 MQTT_Lib::MQTT_Lib(){
     // subtopicsPref.begin("subtopics", true);
@@ -29,12 +30,12 @@ String MQTT_Lib::getMacAddress(){
 String MQTT_Lib::getTopic(String request) {
     String temp_topic = "empty";
 
-    if(cached_company.length() == 0 || cached_location.length() == 0 || cached_department.length() == 0 || cached_line.length() == 0 || cached_machine.length() == 0) {
+    if(cached_company.length() == 0 || cached_location.length() == 0 || cached_department.length() == 0 || cached_machine.length() == 0) {
         subtopicsPref.begin("subtopics", true);
         cached_company = subtopicsPref.getString("company", "embedsol");
         cached_location = subtopicsPref.getString("location", "bhosari");
         cached_department = subtopicsPref.getString("department", "production");
-        cached_line = subtopicsPref.getString("line", "test");
+        cached_line = subtopicsPref.getString("line", "");
         cached_machine = subtopicsPref.getString("machine", "testmachine");
         subtopicsPref.end();
     }
@@ -46,8 +47,10 @@ String MQTT_Lib::getTopic(String request) {
     temp_topic += "/";
     temp_topic += cached_department;
     temp_topic += "/";
-    temp_topic += cached_line;
-    temp_topic += "/";
+    if(cached_line.length() ){
+        temp_topic += cached_line;
+        temp_topic += "/";
+    }
     temp_topic += cached_machine;
     temp_topic += "/";
     
@@ -60,6 +63,16 @@ String MQTT_Lib::getTopic(String request) {
     return temp_topic;
 }
 
+void MQTT_Lib::loadSubtopicsFromPreferences() {
+    subtopicsPref.begin("subtopics", true);
+    cached_company = subtopicsPref.getString("company", "embedsol");
+    cached_location = subtopicsPref.getString("location", "bhosari");
+    cached_department = subtopicsPref.getString("department", "production");
+    cached_line = subtopicsPref.getString("line", "");
+    cached_machine = subtopicsPref.getString("machine", "testmachine");
+    subtopicsPref.end();
+}
+
 void MQTT_Lib::config(const char *ip, uint16_t port, const char *user, const char *password, const char *willMsg, Client &client) {
     IPAddress mqttIP;
     mqttIP.fromString(ip);
@@ -70,9 +83,9 @@ void MQTT_Lib::config(const char *ip, uint16_t port, const char *user, const cha
     
     PubSubClient::setClient(client);
     PubSubClient::setServer(mqttIP, port); // Convert port from string to integer
-    PubSubClient::setBufferSize(4096); // Reduced buffer size to prevent heap corruption (was 32000)
-    PubSubClient::setKeepAlive(15); // Keep-alive interval for connection (increased for stability)
-    PubSubClient::setSocketTimeout(5); // Socket timeout in seconds (increased for reliability)
+    PubSubClient::setBufferSize(32000); // Reduced buffer size to prevent heap corruption (was 32000)
+    PubSubClient::setKeepAlive(5); // Keep-alive interval for connection (increased for stability)
+    PubSubClient::setSocketTimeout(1); // Socket timeout in seconds (increased for reliability)
   
     
     mqtt_user = String(user);
@@ -105,6 +118,15 @@ void MQTT_Lib::setsubtopic(const DynamicJsonDocument &obj) {
     if(obj.containsKey("machine_name")) cached_machine = obj["machine_name"].as<String>();
 
 }
+
+void MQTT_Lib::setsubtopic(String _company, String _location, String _department, String _line, String _machine) {
+    cached_company = _company;
+    cached_location = _location;
+    cached_department = _department;
+    cached_line = _line;
+    cached_machine = _machine;
+}
+
 
 void MQTT_Lib::setsubscribeto(String _sub_to){
     sub_to = _sub_to;

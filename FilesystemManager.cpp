@@ -1,6 +1,7 @@
 #include "FilesystemManager.h"
 #include <Arduino.h>
 #include "esp_task_wdt.h"
+#include "esp_partition.h"
 
 #define MMC_SCK 14 // Define the pin number for SCK
 #define MMC_MISO 12 // Define the pin number for MISO
@@ -38,6 +39,24 @@ static void fsOpRunner(void* param) {
 // Static wrappers for FFat operations (used as function pointers)
 static bool _ffatBeginNoFormat() { return FFat.begin(false); }
 static bool _ffatFormat() { return FFat.format(); }
+// Composite: end + format + begin all in one task (avoids VFS task-context mismatch)
+static bool _ffatEndFormatBegin() {
+    FFat.end();
+    delay(50);
+    bool ok = FFat.format();
+    if (!ok) {
+        Serial.println("[FS] FFat.format() returned false, retrying with full wipe...");
+        // Try full wipe as fallback
+        const esp_partition_t *p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_FAT, "ffat");
+        if (p) {
+            esp_partition_erase_range(p, 0, p->size);
+            delay(50);
+            ok = true; // Partition erased, begin(true) will reformat
+        }
+    }
+    delay(50);
+    return FFat.begin(ok ? false : true);
+}
 
 bool FilesystemManager::execOnInternalStack(bool (*func)()) {
     const size_t STACK_WORDS = 4096;  // 16KB stack in internal SRAM
@@ -574,7 +593,11 @@ bool FilesystemManager::format(bool quickFormat) {
     switch (currentFSType) {
         case FilesystemType::FFAT: {
             Serial.println("Formatting FFat filesystem...");
-            FFat.end(); // Unmount before formatting
+            // Don't call FFat.end() - let FFat.format() handle unmount internally
+            // Calling end() first unregisters the partition, then format() fails
+            // trying to unmount an already-unregistered partition
+            activeFS = nullptr;
+            FS_status = false;
             yield();
             delay(100);
 
@@ -631,30 +654,19 @@ bool FilesystemManager::format(bool quickFormat) {
 bool FilesystemManager::safeFormatFFat() {
     Serial.println("=== SAFE FFat FORMAT ===");
 
-    // Unmount if currently mounted
-    if (currentFSType == FilesystemType::FFAT && activeFS != nullptr) {
-        FFat.end();
-        activeFS = nullptr;
-        FS_status = false;
-    }
+    // Clear our tracking state before format
+    activeFS = nullptr;
+    FS_status = false;
 
     yield();
     delay(100);
 
-    bool formatted = execOnInternalStack(_ffatFormat);
+    // Run end + format + begin as a single operation on internal-SRAM stack.
+    // This avoids VFS state mismatch when FFat.end() and FFat.format() run
+    // on different tasks (main vs internal-stack).
+    bool success = execOnInternalStack(_ffatEndFormatBegin);
 
-    if (!formatted) {
-        Serial.println("FFat format failed.");
-        return false;
-    }
-
-    Serial.println("FFat formatted. Mounting...");
-    yield();
-    delay(100);
-
-    bool mounted = execOnInternalStack(_ffatBeginNoFormat);
-
-    if (mounted) {
+    if (success) {
         activeFS = &FFat;
         currentFSType = FilesystemType::FFAT;
         FS_status = true;
@@ -662,7 +674,7 @@ bool FilesystemManager::safeFormatFFat() {
         return true;
     }
 
-    Serial.println("FFat mount after format failed.");
+    Serial.println("FFat format+mount failed.");
     return false;
 }
 

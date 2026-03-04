@@ -22,6 +22,11 @@ void splitTopic(String topic , String split_char) {
         token = strtok(NULL, split_char.c_str() );
         topicCount++;
     }
+    int i = topicCount;
+    while(i < MAX_TOPIC_LEVELS) {
+        split_data[i] = ""; // Clear remaining entries
+        i++;
+    }
 }
 int gettopiccount(){
     return topicCount;

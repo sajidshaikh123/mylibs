@@ -12,6 +12,7 @@ EthernetManager::EthernetManager(){
   ethernet_CS = CS_PIN;
   ethernet_RST = RST_PIN;
   pinMode(RST_PIN,OUTPUT);
+  digitalWrite(ethernet_RST, HIGH);
 }
 
 void EthernetManager::setIPSettings(const uint8_t* mac, bool useDHCP,

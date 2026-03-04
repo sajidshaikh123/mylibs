@@ -13,7 +13,7 @@
 #define MQTT_RECONNECT_INTERVAL 5000  // Time interval for MQTT reconnect attempts (in ms)
 #define MQTT_LOOP_INTERVAL 50          // Time interval for calling the loop function (in ms)
 
-extern Preferences subtopicsPref;
+
 
 class MQTT_Lib : public PubSubClient {
 public:
@@ -28,6 +28,8 @@ public:
     bool connect(); // Attempt to connect to MQTT broker
     void loop();  // Handle MQTT loop operations
     void setsubtopic(const DynamicJsonDocument &obj);
+    void setsubtopic(String _company, String _location, String _department, String _line, String _machine);
+    void loadSubtopicsFromPreferences();
     void setCallback(MQTT_CALLBACK_SIGNATURE); // Set MQTT message callback function
     uint8_t connectionStatus();
     String getMacTopic(String request);
