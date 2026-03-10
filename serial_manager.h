@@ -32,6 +32,8 @@ extern Preferences mqttPref;
 extern Preferences hmiPref;
 extern Preferences tcpModbusPref;
 extern Preferences settingsPref;
+extern Preferences rs485ModbusPref;
+extern bool rs485ModbusEnabled;
 
 std::function<void(String cmd, String args)> serial_processcallback = nullptr;
 
@@ -51,7 +53,8 @@ void printHelp() {
     Serial.println("  mqtt [args]              - MQTT configuration commands");
     Serial.println("  subtopic [args]          - Subtopic configuration commands");
     Serial.println("  hmi [args]               - HMI display configuration commands");
-    Serial.println("  tcpmodbus [args]            - Modbus device management commands");
+    Serial.println("  tcpmodbus [args]            - TCP Modbus device management commands");
+    Serial.println("  rs485modbus [args]          - RS485 Modbus RTU commands");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
     Serial.println("");
     Serial.println("File System Commands:");
@@ -733,13 +736,14 @@ void handleEthernetCommand(String args) {
         Serial.println("======================");
     }else if (subCmd == "show") {
         Serial.println("=== Saved Ethernet Configuration ===");
-        
+        ethernetPref.begin("ethernet", true);
         bool enabled = ethernetPref.getBool("enabled", false);
         bool useDHCP = ethernetPref.getBool("dhcp", true);
         String ip = ethernetPref.getString("ip", "");
         String gateway = ethernetPref.getString("gateway", "");
         String subnet = ethernetPref.getString("subnet", "");
         String dns = ethernetPref.getString("dns", "");
+        ethernetPref.end();
         
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         Serial.printf("Mode: %s\n", useDHCP ? "DHCP" : "Static IP");
@@ -995,6 +999,54 @@ void handleRTCCommand(String args) {
 }
 
 
+// ==================== RS485 MODBUS COMMAND HANDLER ====================
+void printRS485ModbusHelp() {
+    Serial.println("======= RS485 Modbus Commands ========");
+    Serial.println("  rs485modbus enable       - Enable RS485 Modbus RTU");
+    Serial.println("  rs485modbus disable      - Disable RS485 Modbus RTU");
+    Serial.println("  rs485modbus status       - Show RS485 Modbus status");
+    Serial.println("Note: Changes require device reboot to take effect");
+    Serial.println("======================================");
+}
+
+void handleRS485ModbusCommand(String args) {
+    args.trim();
+    int spaceIndex = args.indexOf(' ');
+    String subCmd = (spaceIndex > 0) ? args.substring(0, spaceIndex) : args;
+    String subArgs = (spaceIndex > 0) ? args.substring(spaceIndex + 1) : "";
+    subCmd.toLowerCase();
+    subArgs.trim();
+
+    if (subCmd == "" || subCmd == "help" || subCmd == "?") {
+        printRS485ModbusHelp();
+    }
+    else if (subCmd == "enable") {
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putBool("modbus_enabled", true);
+        rs485ModbusPref.end();
+        Serial.println("[RS485Modbus] ✓ Enabled (reboot to apply)");
+    }
+    else if (subCmd == "disable") {
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putBool("modbus_enabled", false);
+        rs485ModbusPref.end();
+        Serial.println("[RS485Modbus] ✓ Disabled (reboot to apply)");
+    }
+    else if (subCmd == "status") {
+        Serial.println("=== RS485 Modbus Status ===");
+        rs485ModbusPref.begin("rs485modbus", true);
+        Serial.printf("Enabled (saved): %s\n", rs485ModbusPref.getBool("modbus_enabled", false) ? "Yes" : "No");
+        Serial.printf("Running: %s\n", rs485ModbusEnabled ? "Yes" : "No");
+        Serial.println("===========================");
+        rs485ModbusPref.end();
+    }
+    else {
+        Serial.printf("[RS485Modbus] ✗ Unknown command: %s\n", subCmd.c_str());
+        printRS485ModbusHelp();
+    }
+}
+
+
 // ==================== SETTINGS COMMAND HANDLER ====================
 void printSettingsHelp() {
     Serial.println("========= Settings Commands ==========");
@@ -1030,28 +1082,24 @@ void handleSettingsCommand(String args) {
         printSettingsHelp();
     }
     else if (subCmd == "show" || subCmd == "status") {
-        settingsPref.end();
         settingsPref.begin("settings", true);
         Serial.println("=== Board Settings ===");
         Serial.printf("  Filesystem (fs):     %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
         Serial.printf("  Input Expander:      %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
         Serial.printf("  Output Expander:     %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
         Serial.println("======================");
+        settingsPref.end();
     }
     else if (subCmd == "fs" || subCmd == "filesystem") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("fs_enabled", true);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Filesystem enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("fs_enabled", false);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Filesystem disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Filesystem is: %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
@@ -1060,18 +1108,14 @@ void handleSettingsCommand(String args) {
     }
     else if (subCmd == "input") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("input_enabled", true);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Input expander enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("input_enabled", false);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Input expander disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Input expander is: %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
@@ -1080,18 +1124,14 @@ void handleSettingsCommand(String args) {
     }
     else if (subCmd == "output") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("output_enabled", true);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Output expander enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
-            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("output_enabled", false);
             settingsPref.end();
-            settingsPref.begin("settings", true);
             Serial.println("[Settings] Output expander disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Output expander is: %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
@@ -1223,6 +1263,9 @@ void executeCommand(String cmd, String args) {
     }
     else if (cmd == "tcpmodbus") {
         handleTCPModbusCommand(args);
+    }
+    else if (cmd == "rs485modbus" || cmd == "rs485" || cmd == "modbus") {
+        handleRS485ModbusCommand(args);
     }
     else if (cmd == "rtc") {
         handleRTCCommand(args);

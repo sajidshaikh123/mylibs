@@ -136,6 +136,8 @@ bool ethernetEnabled = false;  // Cache ethernet enabled status
 bool wifiEnabled = false;      // Cache WiFi enabled status
 bool tcpModbusEnabled = false; // Cache TCP Modbus enabled status
 bool filesystemReady = false;  // Track filesystem status
+bool rs485ModbusEnabled = false; // Cache RS485 Modbus enabled status
+
 
 // Cache MQTT subtopic components to avoid NVS reads in high-frequency loops
 String cached_company = "";
@@ -160,6 +162,7 @@ Preferences mqttPref;
 Preferences hmiPref;
 Preferences tcpModbusPref;
 Preferences settingsPref;
+Preferences rs485ModbusPref;
 
 
 String mqttTransport = "auto"; // Cache MQTT transport type
@@ -605,7 +608,14 @@ void boardinit(){
         String gateway = ethernetPref.getString("gateway", "");
         String subnet = ethernetPref.getString("subnet", "");
         String dns = ethernetPref.getString("dns", "");
-        
+        Serial.printf("DHCP: %s\n", useDHCP ? "Yes" : "No");
+        if (!useDHCP) {
+            Serial.printf("IP: %s\n", ip.c_str());
+            Serial.printf("Gateway: %s\n", gateway.c_str());
+            Serial.printf("Subnet: %s\n", subnet.c_str());
+            Serial.printf("DNS: %s\n", dns.c_str());
+        }
+        mac[5] = 0xEF;
         ethManager.setIPSettings(mac, useDHCP, ip.c_str(), subnet.c_str(), gateway.c_str(), dns.c_str());
         yield();
         ethManager.begin();
@@ -656,6 +666,17 @@ void boardinit(){
     mqttPref.end();
     yield();
 
+    rs485ModbusPref.begin("rs485modbus", true);
+    rs485ModbusEnabled = rs485ModbusPref.getBool("modbus_enabled", false);  // Cache the value
+    if(rs485ModbusEnabled){
+        Serial.println("Initializing Modbus RTU over RS485...");
+        modbusInit();
+    } else {
+        Serial.println("Modbus RTU over RS485 is disabled in preferences.");
+    }
+    rs485ModbusPref.end();
+    yield(); // Feed watchdog
+
     // Don't start web servers here - start them after network is ready
     // setupWebServer(); 
     // setupSyncWebServer();
@@ -671,6 +692,7 @@ void boardloop(){
 
     static unsigned long boardloop_count = 0;
     static unsigned long last_boardloop_print = 0;
+    static bool syncServerStarted = false;
     // WiFi init state machine: 0=pending, 1=mode_set, 2=get_mac, 3=disconnect, 4=connect, 5=done
     static uint8_t wifi_init_state = 0;
     static unsigned long wifi_init_timer = 0;
@@ -681,7 +703,17 @@ void boardloop(){
 
     yield(); // Feed watchdog at start
     
-    
+    if(syncServerStarted) {
+        syncServer.handleClient();
+    }
+    if(ethWebServerStarted) {
+        handleEthWeb();
+    }
+
+    if(rs485ModbusEnabled){
+        modbusLoop(); // Disabled - ModbusRTU causes FreeRTOS assert failed: xQueueSemaphoreTake queue.c:1713
+        yield();
+    }
     
     // Non-blocking WiFi initialization state machine
     if (wifiEnabled && wifi_init_state < 5) {
@@ -833,7 +865,6 @@ void boardloop(){
     yield(); // Feed watchdog after Modbus
     
     // Web server handling - only use sync server for Ethernet
-    static bool syncServerStarted = false;
     if(ethernetEnabled){  // Use cached value instead of reading from NVS
         if(ethManager.status() == 1 && !syncServerStarted) {
             syncServerStarted = true;
@@ -841,9 +872,7 @@ void boardloop(){
             Serial.println("[Web] Sync server started for Ethernet");
         }
     }
-    if(syncServerStarted) {
-        syncServer.handleClient();
-    }
+    
     
     yield(); // Feed watchdog after web server
     
@@ -855,7 +884,7 @@ void boardloop(){
                     conn_status = 1;
                     
                     Serial.println(Ethernet.localIP());
-
+                    setupEthWebServer();
                     if(mqttEnabled){
                         if(mqttTransport == "ethernet" || mqttTransport == "auto"){
                             mqtt_obj.setClient(ethClient);
@@ -905,14 +934,31 @@ void boardloop(){
             execution_timer = millis();
             if(mqttEnabled){
                 static bool prev_mqtt_connected = false;
-                mqtt_obj.loop();
-                mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
-                // Publish peripheral status on fresh MQTT connection
-                if (mqtt_connected && !prev_mqtt_connected) {
-                    Serial.println("[MQTT] Connected - publishing peripheral status...");
-                    publishPeripheralStatus();
+                if(mqttTransport == "wifi" || mqttTransport == "auto"){ // auto or ethernet
+                    
+                    mqtt_obj.loop();
+                    mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
+                    // Publish peripheral status on fresh MQTT connection
+                    if (mqtt_connected && !prev_mqtt_connected) {
+                        Serial.println("[MQTT] Connected - publishing peripheral status...");
+                        publishPeripheralStatus();
+                    }
+                    prev_mqtt_connected = mqtt_connected;
+                }else if(mqttTransport == "ethernet"){
+                    // With Ethernet transport, only loop MQTT if Ethernet is connected
+                    if (conn_status == 1) {
+                        mqtt_obj.loop();
+                        mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
+                        // Publish peripheral status on fresh MQTT connection
+                        if (mqtt_connected && !prev_mqtt_connected) {
+                            Serial.println("[MQTT] Connected - publishing peripheral status...");
+                            publishPeripheralStatus();
+                        }
+                        prev_mqtt_connected = mqtt_connected;
+                    } else {
+                        mqtt_connected = false; // Ensure we update status if Ethernet disconnects
+                    }
                 }
-                prev_mqtt_connected = mqtt_connected;
             }
             unsigned long mqtt_time = millis() - execution_timer;
             if(mqtt_time > 500){

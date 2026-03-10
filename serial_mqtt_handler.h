@@ -236,7 +236,8 @@ void handleMQTTCommand(String args) {
         Serial.printf("Client ID: %s\n", clientid.length() > 0 ? clientid.c_str() : "(not set)");
         Serial.printf("Transport: %s\n", transport.c_str());
         Serial.println("================================");
-    }   mqttPref.end();
+        mqttPref.end();
+    }   
     else if (subCmd == "clear") {
         mqttPref.end();
         mqttPref.begin("mqtt", false);

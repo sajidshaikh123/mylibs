@@ -11,6 +11,7 @@
 #include <Update.h>
 #include "RTCManager.h"
 #include "FilesystemManager.h"
+#include "mbedtls/base64.h"
 
 // Prevent HTTP method enum conflicts between ESPAsyncWebServer and ESP32 WebServer
 // Undefine the conflicting macros from ESPAsyncWebServer before other libraries include WebServer
@@ -27,11 +28,14 @@ extern Preferences wifiPref;
 extern Preferences ethernetPref;
 extern Preferences mqttPref;
 extern Preferences hmiPref;
+extern Preferences rs485ModbusPref;
+extern bool rs485ModbusEnabled;
 extern RTCManager rtc;
 extern FilesystemManager fsManagerFFat;
 
-// Web server on port 8080
-AsyncWebServer webServer(8080);
+// Web server on port 80
+AsyncWebServer webServer(80);
+EthernetServer ethWebServer(80);
 AsyncWebSocket ws("/ws");
 
 // Authentication credentials (store in preferences in production)
@@ -41,6 +45,7 @@ bool web_auth_enabled = true;
 
 // Server state
 bool webServerStarted = false;
+bool ethWebServerStarted = false;
 bool filesystemMounted = false;
 
 // Forward declarations
@@ -49,6 +54,11 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
 String getSystemStatusJSON();
 String getNetworkStatusJSON();
 void initFilesystem();
+
+// Ethernet web server forward declarations
+void setupEthWebServer();
+void handleEthWebClients();
+void handleEthWeb();
 
 // Helper function to get Ethernet MAC as String
 String getEthernetMACString() {
@@ -483,6 +493,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <button class="tab" onclick="showTab('mqtt', this)">📡 MQTT</button>
             <button class="tab" onclick="showTab('rtc', this)">🕐 RTC</button>
             <button class="tab" onclick="showTab('hmi', this)">🖥️ HMI</button>
+            <button class="tab" onclick="showTab('rs485modbus', this)">🔌 RS485</button>
             <button class="tab" onclick="showTab('files', this)">📁 Files</button>
             <button class="tab" onclick="showTab('firmware', this)">⬆️ Firmware</button>
             <button class="tab" onclick="showTab('settings', this)">⚙️ Settings</button>
@@ -699,6 +710,28 @@ const char index_html[] PROGMEM = R"rawliteral(
                 </div>
             </div>
             
+            <!-- RS485 Modbus Tab -->
+            <div id="rs485modbus" class="tab-content">
+                <div class="card">
+                    <h3>RS485 Modbus RTU Configuration</h3>
+                    <div class="form-group">
+                        <label>RS485 Modbus Enabled</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="rs485ModbusEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Status</label>
+                        <div class="value" id="rs485ModbusRunning">-</div>
+                    </div>
+                    <p style="color: #666; font-size: 14px; margin-top: 10px;">
+                        ⚠️ Changes require device reboot to take effect
+                    </p>
+                    <button class="btn btn-primary" onclick="saveRS485ModbusConfig()">💾 Save RS485 Modbus Config</button>
+                </div>
+            </div>
+
             <!-- Files Tab -->
             <div id="files" class="tab-content">
                 <div class="card">
@@ -1008,6 +1041,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                 enabled: document.getElementById('hmiEnabled').checked
             };
             apiCall('/api/hmi/config', 'POST', data);
+        }
+
+        function saveRS485ModbusConfig() {
+            const data = {
+                enabled: document.getElementById('rs485ModbusEnabled').checked
+            };
+            apiCall('/api/rs485modbus/config', 'POST', data);
         }
         
         function setRTC() {
@@ -1435,6 +1475,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (hmiConfig.success) {
                 document.getElementById('hmiEnabled').checked = hmiConfig.enabled;
             }
+
+            // Load RS485 Modbus config
+            const rs485Config = await apiCall('/api/rs485modbus/config');
+            if (rs485Config.success) {
+                document.getElementById('rs485ModbusEnabled').checked = rs485Config.enabled;
+                document.getElementById('rs485ModbusRunning').textContent = rs485Config.running ? 'Running' : 'Stopped';
+            }
         }
         
         // Initialize on page load
@@ -1729,6 +1776,42 @@ void handleHMIConfig(AsyncWebServerRequest *request) {
         hmiPref.begin("hmi", true);
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"HMI config saved. Reboot required.\"}");
+    }
+}
+
+
+void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+    
+    if (request->method() == HTTP_GET) {
+        DynamicJsonDocument doc(256);
+        doc["success"] = true;
+        doc["enabled"] = rs485ModbusPref.getBool("modbus_enabled", false);
+        doc["running"] = rs485ModbusEnabled;
+        
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    }
+    else if (request->method() == HTTP_POST) {
+        String body = request->arg("plain");
+        DynamicJsonDocument doc(256);
+        
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+        
+        rs485ModbusPref.begin("rs485modbus", false);
+        
+        if (doc.containsKey("enabled")) {
+            rs485ModbusPref.putBool("modbus_enabled", doc["enabled"]);
+        }
+        
+        rs485ModbusPref.end();
+        
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"RS485 Modbus config saved. Reboot required.\"}");
     }
 }
 
@@ -2223,6 +2306,7 @@ void setupWebServer() {
     webServer.on("/api/mqtt/config", HTTP_ANY, handleMQTTConfig);
     webServer.on("/api/subtopic/config", HTTP_ANY, handleSubtopicConfig);
     webServer.on("/api/hmi/config", HTTP_ANY, handleHMIConfig);
+    webServer.on("/api/rs485modbus/config", HTTP_ANY, handleRS485ModbusConfig);
     webServer.on("/api/rtc/set", HTTP_POST, handleRTCSet);
     webServer.on("/api/system/reboot", HTTP_POST, handleSystemReboot);
     webServer.on("/api/system/factory", HTTP_POST, handleFactoryReset);
@@ -2310,6 +2394,699 @@ void broadcastStatusToWebClients() {
         String status = getSystemStatusJSON();
         ws.textAll(status);
     }
+}
+
+
+// ==================================================================================
+// ==================== ETHERNET WEB SERVER (Classic Ethernet.h) ====================
+// ==================================================================================
+
+// Helper: Send HTTP response header
+void ethSendHeader(EthernetClient &client, int code, const char* contentType, size_t contentLength = 0) {
+    client.print("HTTP/1.1 ");
+    client.print(code);
+    switch (code) {
+        case 200: client.println(" OK"); break;
+        case 400: client.println(" Bad Request"); break;
+        case 401: client.println(" Unauthorized"); break;
+        case 404: client.println(" Not Found"); break;
+        case 500: client.println(" Internal Server Error"); break;
+        default:  client.println(" OK"); break;
+    }
+    client.print("Content-Type: ");
+    client.println(contentType);
+    client.println("Access-Control-Allow-Origin: *");
+    client.println("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
+    client.println("Access-Control-Allow-Headers: Content-Type, Authorization");
+    if (contentLength > 0) {
+        client.print("Content-Length: ");
+        client.println(contentLength);
+    }
+    client.println("Connection: close");
+    if (code == 401) {
+        client.println("WWW-Authenticate: Basic realm=\"Login Required\"");
+    }
+    client.println(); // End of headers
+}
+
+// Helper: Send JSON response
+void ethSendJSON(EthernetClient &client, int code, const String &json) {
+    ethSendHeader(client, code, "application/json", json.length());
+    size_t sent = 0;
+    while (sent < json.length()) {
+        size_t chunk = min((size_t)1024, json.length() - sent);
+        client.write((const uint8_t*)(json.c_str() + sent), chunk);
+        sent += chunk;
+    }
+}
+
+// Helper: Send large HTML page in chunks
+void ethSendHTMLPage(EthernetClient &client, const char* html) {
+    size_t len = strlen_P(html);
+    ethSendHeader(client, 200, "text/html", len);
+    size_t sent = 0;
+    const size_t chunkSize = 1024;
+    while (sent < len) {
+        size_t toSend = min(chunkSize, len - sent);
+        client.write((const uint8_t*)(html + sent), toSend);
+        sent += toSend;
+        delay(1); // Yield for W5500 buffer
+    }
+}
+
+// Helper: Check Basic Auth
+bool checkEthAuth(const String &authHeader) {
+    if (!web_auth_enabled) return true;
+    if (authHeader.length() == 0) return false;
+    if (!authHeader.startsWith("Basic ")) return false;
+    
+    String encoded = authHeader.substring(6);
+    encoded.trim();
+    
+    // Decode base64 using mbedtls
+    unsigned char decoded[128];
+    size_t decodedLen = 0;
+    int ret = mbedtls_base64_decode(decoded, sizeof(decoded) - 1, &decodedLen,
+                                     (const unsigned char*)encoded.c_str(), encoded.length());
+    if (ret != 0) return false;
+    decoded[decodedLen] = 0;
+    
+    String credentials = String((char*)decoded);
+    String expected = web_username + ":" + web_password;
+    return (credentials == expected);
+}
+
+// Helper: Extract query parameter value
+String getEthQueryParam(const String &query, const String &key) {
+    int start = query.indexOf(key + "=");
+    if (start < 0) return "";
+    start += key.length() + 1;
+    int end = query.indexOf('&', start);
+    if (end < 0) end = query.length();
+    return query.substring(start, end);
+}
+
+// Helper: URL decode
+String urlDecode(const String &input) {
+    String decoded = "";
+    for (unsigned int i = 0; i < input.length(); i++) {
+        if (input[i] == '%' && i + 2 < input.length()) {
+            char hex[3] = { input[i + 1], input[i + 2], 0 };
+            decoded += (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else if (input[i] == '+') {
+            decoded += ' ';
+        } else {
+            decoded += input[i];
+        }
+    }
+    return decoded;
+}
+
+// ==================== ETHERNET WEB SERVER SETUP ====================
+
+void setupEthWebServer() {
+    if (ethWebServerStarted) return;
+    ethWebServer.begin();
+    ethWebServerStarted = true;
+    Serial.printf("[EthWeb] Server started on port 8080 at %s\n", Ethernet.localIP().toString().c_str());
+}
+
+// ==================== ETHERNET WEB CLIENT HANDLER ====================
+
+void handleEthWebClients() {
+    if (!ethWebServerStarted) return;
+    
+    EthernetClient client = ethWebServer.available();
+    if (!client) return;
+    
+    // Wait for data with timeout
+    unsigned long timeout = millis();
+    while (!client.available()) {
+        if (millis() - timeout > 3000) { client.stop(); return; }
+        delay(1);
+    }
+    
+    // Read request line: "GET /path HTTP/1.1"
+    String requestLine = client.readStringUntil('\n');
+    requestLine.trim();
+    
+    int sp1 = requestLine.indexOf(' ');
+    int sp2 = requestLine.indexOf(' ', sp1 + 1);
+    if (sp1 < 0 || sp2 < 0) { client.stop(); return; }
+    
+    String method = requestLine.substring(0, sp1);
+    String fullPath = requestLine.substring(sp1 + 1, sp2);
+    
+    // Separate path and query string
+    String path = fullPath;
+    String query = "";
+    int qIdx = fullPath.indexOf('?');
+    if (qIdx >= 0) {
+        path = fullPath.substring(0, qIdx);
+        query = fullPath.substring(qIdx + 1);
+    }
+    
+    // Read headers
+    String authHeader = "";
+    int contentLength = 0;
+    while (client.available()) {
+        String line = client.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) break; // End of headers
+        if (line.startsWith("Authorization: ")) authHeader = line.substring(15);
+        else if (line.startsWith("Content-Length: ")) contentLength = line.substring(16).toInt();
+    }
+    
+    // Read body for POST requests
+    String body = "";
+    if (contentLength > 0 && contentLength < 8192) {
+        unsigned long bodyTimeout = millis();
+        while ((int)body.length() < contentLength) {
+            if (client.available()) {
+                body += (char)client.read();
+                bodyTimeout = millis();
+            } else if (millis() - bodyTimeout > 2000) {
+                break;
+            } else {
+                delay(1);
+            }
+        }
+    }
+    
+    // Handle CORS preflight
+    if (method == "OPTIONS") {
+        ethSendHeader(client, 200, "text/plain", 0);
+        client.stop();
+        return;
+    }
+    
+    // Auth check
+    if (!checkEthAuth(authHeader)) {
+        ethSendHeader(client, 401, "text/plain", 12);
+        client.print("Unauthorized");
+        client.stop();
+        return;
+    }
+    
+    Serial.printf("[EthWeb] %s %s\n", method.c_str(), path.c_str());
+    
+    // ==================== ROUTE HANDLING ====================
+    
+    // --- Serve main page ---
+    if (path == "/" && method == "GET") {
+        ethSendHTMLPage(client, index_html);
+    }
+    
+    // --- GET /api/status ---
+    else if (path == "/api/status" && method == "GET") {
+        DynamicJsonDocument doc(2048);
+        doc["success"] = true;
+        
+        JsonObject system = doc.createNestedObject("system");
+        system["chip_model"] = ESP.getChipModel();
+        system["chip_cores"] = ESP.getChipCores();
+        system["cpu_freq"] = ESP.getCpuFreqMHz();
+        system["free_heap"] = ESP.getFreeHeap();
+        system["flash_size"] = ESP.getFlashChipSize();
+        system["uptime"] = millis() / 1000;
+        
+        JsonObject network = doc.createNestedObject("network");
+        if (WiFi.status() == WL_CONNECTED) {
+            network["wifi_status"] = "Connected";
+            network["wifi_ssid"] = WiFi.SSID();
+            network["wifi_ip"] = WiFi.localIP().toString();
+            network["wifi_rssi"] = WiFi.RSSI();
+        } else {
+            network["wifi_status"] = "Disconnected";
+        }
+        if (Ethernet.linkStatus() == LinkON) {
+            network["eth_status"] = "Connected";
+            network["ip"] = Ethernet.localIP().toString();
+            network["gateway"] = Ethernet.gatewayIP().toString();
+            network["mac"] = getEthernetMACString();
+        } else {
+            network["eth_status"] = "Disconnected";
+            if (WiFi.status() == WL_CONNECTED) {
+                network["ip"] = WiFi.localIP().toString();
+                network["mac"] = WiFi.macAddress();
+            }
+        }
+        
+        JsonObject rtcObj = doc.createNestedObject("rtc");
+        rtcObj["datetime"] = rtc.getDateTime();
+        rtcObj["type"] = rtc.isExternalRTCAvailable() ? "External (DS3231)" : "Internal";
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- GET /api/wifi/config ---
+    else if (path == "/api/wifi/config" && method == "GET") {
+        DynamicJsonDocument doc(512);
+        doc["success"] = true;
+        doc["enabled"] = wifiPref.getBool("enabled", false);
+        doc["ssid"] = wifiPref.getString("ssid", "");
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/wifi/config ---
+    else if (path == "/api/wifi/config" && method == "POST") {
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            wifiPref.end();
+            wifiPref.begin("wifi", false);
+            if (doc.containsKey("enabled")) wifiPref.putBool("enabled", doc["enabled"]);
+            if (doc.containsKey("ssid")) wifiPref.putString("ssid", doc["ssid"].as<String>());
+            if (doc.containsKey("password")) wifiPref.putString("password", doc["password"].as<String>());
+            wifiPref.end();
+            wifiPref.begin("wifi", true);
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"WiFi config saved\"}");
+        }
+    }
+    
+    // --- GET /api/ethernet/config ---
+    else if (path == "/api/ethernet/config" && method == "GET") {
+        DynamicJsonDocument doc(512);
+        doc["success"] = true;
+        doc["enabled"] = ethernetPref.getBool("enabled", true);
+        doc["dhcp"] = ethernetPref.getBool("dhcp", true);
+        doc["ip"] = ethernetPref.getString("ip", "");
+        doc["gateway"] = ethernetPref.getString("gateway", "");
+        doc["subnet"] = ethernetPref.getString("subnet", "");
+        doc["dns"] = ethernetPref.getString("dns", "");
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/ethernet/config ---
+    else if (path == "/api/ethernet/config" && method == "POST") {
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            ethernetPref.begin("ethernet", false);
+            if (doc.containsKey("enabled")) ethernetPref.putBool("enabled", doc["enabled"]);
+            if (doc.containsKey("dhcp")) ethernetPref.putBool("dhcp", doc["dhcp"]);
+            if (doc.containsKey("ip")) ethernetPref.putString("ip", doc["ip"].as<String>());
+            if (doc.containsKey("gateway")) ethernetPref.putString("gateway", doc["gateway"].as<String>());
+            if (doc.containsKey("subnet")) ethernetPref.putString("subnet", doc["subnet"].as<String>());
+            if (doc.containsKey("dns")) ethernetPref.putString("dns", doc["dns"].as<String>());
+            ethernetPref.end();
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Ethernet config saved. Reconnect to apply.\"}");
+        }
+    }
+    
+    // --- GET /api/mqtt/config ---
+    else if (path == "/api/mqtt/config" && method == "GET") {
+        mqttPref.begin("mqtt", true);
+        DynamicJsonDocument doc(512);
+        doc["success"] = true;
+        doc["server"] = mqttPref.getString("server", "");
+        doc["port"] = mqttPref.getUShort("port", 1883);
+        doc["username"] = mqttPref.getString("username", "");
+        doc["transport"] = mqttPref.getString("transport", "auto");
+        mqttPref.end();
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/mqtt/config ---
+    else if (path == "/api/mqtt/config" && method == "POST") {
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            mqttPref.begin("mqtt", false);
+            if (doc.containsKey("server")) mqttPref.putString("server", doc["server"].as<String>());
+            if (doc.containsKey("port")) mqttPref.putUShort("port", doc["port"].as<uint16_t>());
+            if (doc.containsKey("username")) mqttPref.putString("username", doc["username"].as<String>());
+            if (doc.containsKey("password")) mqttPref.putString("password", doc["password"].as<String>());
+            if (doc.containsKey("transport")) mqttPref.putString("transport", doc["transport"].as<String>());
+            mqttPref.end();
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"MQTT config saved\"}");
+        }
+    }
+    
+    // --- GET /api/subtopic/config ---
+    else if (path == "/api/subtopic/config" && method == "GET") {
+        Preferences subPref;
+        subPref.begin("subtopics", true);
+        DynamicJsonDocument doc(512);
+        doc["success"] = true;
+        doc["company"] = subPref.getString("company", "");
+        doc["location"] = subPref.getString("location", "");
+        doc["department"] = subPref.getString("department", "");
+        doc["line"] = subPref.getString("line", "");
+        doc["machine"] = subPref.getString("machine", "");
+        subPref.end();
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/subtopic/config ---
+    else if (path == "/api/subtopic/config" && method == "POST") {
+        Preferences subPref;
+        subPref.begin("subtopics", false);
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            subPref.end();
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            if (doc.containsKey("company")) subPref.putString("company", doc["company"].as<String>());
+            if (doc.containsKey("location")) subPref.putString("location", doc["location"].as<String>());
+            if (doc.containsKey("department")) subPref.putString("department", doc["department"].as<String>());
+            if (doc.containsKey("line")) subPref.putString("line", doc["line"].as<String>());
+            if (doc.containsKey("machine")) subPref.putString("machine", doc["machine"].as<String>());
+            subPref.end();
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Subtopic config saved\"}");
+        }
+    }
+    
+    // --- GET /api/hmi/config ---
+    else if (path == "/api/hmi/config" && method == "GET") {
+        DynamicJsonDocument doc(256);
+        doc["success"] = true;
+        doc["enabled"] = hmiPref.getBool("enabled", true);
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/hmi/config ---
+    else if (path == "/api/hmi/config" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            hmiPref.end();
+            hmiPref.begin("hmi", false);
+            if (doc.containsKey("enabled")) hmiPref.putBool("enabled", doc["enabled"]);
+            hmiPref.end();
+            hmiPref.begin("hmi", true);
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"HMI config saved. Reboot required.\"}");
+        }
+    }
+    
+    // --- GET /api/rs485modbus/config ---
+    else if (path == "/api/rs485modbus/config" && method == "GET") {
+        DynamicJsonDocument doc(256);
+        rs485ModbusPref.begin("rs485modbus", true);
+        doc["success"] = true;
+        doc["enabled"] = rs485ModbusPref.getBool("modbus_enabled", false);
+        doc["running"] = rs485ModbusEnabled;
+        rs485ModbusPref.end();
+        
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+    
+    // --- POST /api/rs485modbus/config ---
+    else if (path == "/api/rs485modbus/config" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            rs485ModbusPref.begin("rs485modbus", false);
+            if (doc.containsKey("enabled")) rs485ModbusPref.putBool("modbus_enabled", doc["enabled"]);
+            rs485ModbusPref.end();
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RS485 Modbus config saved. Reboot required.\"}");
+        }
+    }
+
+    // --- POST /api/rtc/set ---
+    else if (path == "/api/rtc/set" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            String datetime = doc["datetime"].as<String>();
+            datetime.replace('T', ' ');
+            int year, month, day, hour, minute, second;
+            int parsed = sscanf(datetime.c_str(), "%d-%d-%d %d:%d:%d",
+                                &year, &month, &day, &hour, &minute, &second);
+            if (parsed != 6) {
+                ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid datetime format\"}");
+            } else {
+                rtc.setDateTime(day, month, year, hour, minute, second);
+                ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RTC updated\"}");
+            }
+        }
+    }
+    
+    // --- POST /api/system/reboot ---
+    else if (path == "/api/system/reboot" && method == "POST") {
+        ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Rebooting...\"}");
+        client.stop();
+        delay(1000);
+        ESP.restart();
+    }
+    
+    // --- POST /api/system/factory ---
+    else if (path == "/api/system/factory" && method == "POST") {
+        wifiPref.end();
+        wifiPref.begin("wifi", false);
+        wifiPref.clear();
+        wifiPref.end();
+        
+        ethernetPref.begin("ethernet", false);
+        ethernetPref.clear();
+        ethernetPref.end();
+        
+        mqttPref.begin("mqtt", false);
+        mqttPref.clear();
+        mqttPref.end();
+        
+        hmiPref.end();
+        hmiPref.begin("hmi", false);
+        hmiPref.clear();
+        hmiPref.end();
+        
+        ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Factory reset complete. Rebooting...\"}");
+        client.stop();
+        delay(1000);
+        ESP.restart();
+    }
+    
+    // --- GET /api/files/list ---
+    else if (path == "/api/files/list" && method == "GET") {
+        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+            ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
+        } else {
+            String filePath = urlDecode(getEthQueryParam(query, "path"));
+            if (filePath.length() == 0) filePath = "/";
+            if (!filePath.startsWith("/")) filePath = "/" + filePath;
+            
+            DynamicJsonDocument doc(4096);
+            doc["success"] = true;
+            doc["total"] = fsManagerFFat.totalBytes();
+            doc["used"] = fsManagerFFat.usedBytes();
+            doc["free"] = fsManagerFFat.freeBytes();
+            doc["fsType"] = fsManagerFFat.getFilesystemName();
+            doc["currentPath"] = filePath;
+            
+            JsonArray files = doc.createNestedArray("files");
+            fs::FS *fs = fsManagerFFat.getActiveFilesystem();
+            if (fs) {
+                File root = fs->open(filePath);
+                if (root && root.isDirectory()) {
+                    File file = root.openNextFile();
+                    while (file) {
+                        JsonObject fileObj = files.createNestedObject();
+                        fileObj["name"] = String(file.name());
+                        fileObj["size"] = file.size();
+                        fileObj["isDir"] = file.isDirectory();
+                        file = root.openNextFile();
+                    }
+                }
+            }
+            
+            String response;
+            serializeJson(doc, response);
+            ethSendJSON(client, 200, response);
+        }
+    }
+    
+    // --- GET /api/files/read ---
+    else if (path == "/api/files/read" && method == "GET") {
+        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+            ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
+        } else {
+            String filePath = urlDecode(getEthQueryParam(query, "path"));
+            if (filePath.length() == 0) {
+                ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Missing path parameter\"}");
+            } else {
+                if (!filePath.startsWith("/")) filePath = "/" + filePath;
+                String content = fsManagerFFat.readFile(filePath);
+                if (content.length() == 0 && !fsManagerFFat.search(filePath)) {
+                    ethSendJSON(client, 404, "{\"success\":false,\"message\":\"File not found\"}");
+                } else {
+                    DynamicJsonDocument doc(8192);
+                    doc["success"] = true;
+                    doc["content"] = content;
+                    doc["path"] = filePath;
+                    String response;
+                    serializeJson(doc, response);
+                    ethSendJSON(client, 200, response);
+                }
+            }
+        }
+    }
+    
+    // --- POST /api/files/write ---
+    else if (path == "/api/files/write" && method == "POST") {
+        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+            ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
+        } else {
+            DynamicJsonDocument doc(8192);
+            DeserializationError error = deserializeJson(doc, body);
+            if (error) {
+                ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            } else if (!doc.containsKey("path") || !doc.containsKey("content")) {
+                ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Missing path or content\"}");
+            } else {
+                String filePath = doc["path"].as<String>();
+                String content = doc["content"].as<String>();
+                if (!filePath.startsWith("/")) filePath = "/" + filePath;
+                if (fsManagerFFat.writeFile(filePath, content.c_str())) {
+                    ethSendJSON(client, 200, "{\"success\":true,\"message\":\"File saved successfully\"}");
+                } else {
+                    ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Failed to write file\"}");
+                }
+            }
+        }
+    }
+    
+    // --- GET /api/files/download ---
+    else if (path == "/api/files/download" && method == "GET") {
+        String filePath = urlDecode(getEthQueryParam(query, "path"));
+        if (filePath.length() == 0) {
+            ethSendHeader(client, 400, "text/plain", 22);
+            client.print("Missing path parameter");
+        } else {
+            if (!filePath.startsWith("/")) filePath = "/" + filePath;
+            if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
+                ethSendHeader(client, 404, "text/plain", 14);
+                client.print("File not found");
+            } else {
+                fs::FS *fs = fsManagerFFat.getActiveFilesystem();
+                if (!fs) {
+                    ethSendHeader(client, 500, "text/plain", 24);
+                    client.print("Filesystem not available");
+                } else {
+                    File file = fs->open(filePath, FILE_READ);
+                    if (!file) {
+                        ethSendHeader(client, 500, "text/plain", 19);
+                        client.print("Failed to open file");
+                    } else {
+                        size_t fileSize = file.size();
+                        String filename = filePath.substring(filePath.lastIndexOf('/') + 1);
+                        client.println("HTTP/1.1 200 OK");
+                        client.println("Content-Type: application/octet-stream");
+                        client.print("Content-Disposition: attachment; filename=\"");
+                        client.print(filename);
+                        client.println("\"");
+                        client.print("Content-Length: ");
+                        client.println(fileSize);
+                        client.println("Connection: close");
+                        client.println();
+                        
+                        uint8_t buf[512];
+                        while (file.available()) {
+                            size_t bytesRead = file.read(buf, sizeof(buf));
+                            client.write(buf, bytesRead);
+                            delay(1);
+                        }
+                        file.close();
+                    }
+                }
+            }
+        }
+    }
+    
+    // --- /api/files/delete ---
+    else if (path == "/api/files/delete" && (method == "POST" || method == "DELETE" || method == "GET")) {
+        String filePath = "";
+        // Check query param first, then body
+        if (query.length() > 0) {
+            filePath = urlDecode(getEthQueryParam(query, "path"));
+        }
+        if (filePath.length() == 0 && body.length() > 0) {
+            DynamicJsonDocument doc(256);
+            if (!deserializeJson(doc, body) && doc.containsKey("path")) {
+                filePath = doc["path"].as<String>();
+            }
+        }
+        
+        if (filePath.length() == 0) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Missing path parameter\"}");
+        } else {
+            if (!filePath.startsWith("/")) filePath = "/" + filePath;
+            if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
+                ethSendJSON(client, 404, "{\"success\":false,\"message\":\"File not found\"}");
+            } else {
+                fs::FS *fs = fsManagerFFat.getActiveFilesystem();
+                bool deleted = false;
+                if (fs) {
+                    File file = fs->open(filePath);
+                    if (file) {
+                        bool isDir = file.isDirectory();
+                        file.close();
+                        deleted = isDir ? fsManagerFFat.deleteDir(filePath) : fsManagerFFat.deleteFile(filePath);
+                    }
+                }
+                if (!deleted) deleted = fsManagerFFat.deleteFile(filePath);
+                
+                if (deleted) {
+                    ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Deleted successfully\"}");
+                } else {
+                    ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Failed to delete\"}");
+                }
+            }
+        }
+    }
+    
+    // --- 404 Not Found ---
+    else {
+        ethSendJSON(client, 404, "{\"success\":false,\"message\":\"Not found\"}");
+    }
+    
+    delay(1);
+    client.stop();
+}
+
+
+// ==================== ETHERNET WEB LOOP HANDLER ====================
+
+void handleEthWeb() {
+    if (!ethWebServerStarted) {
+        if (Ethernet.linkStatus() == LinkON) {
+            Serial.println("[EthWeb] Ethernet link detected, starting Ethernet HTTP server...");
+            setupEthWebServer();
+        }
+    }
+    handleEthWebClients();
 }
 
 #endif // WEB_CONFIGURATION_H
