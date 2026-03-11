@@ -614,6 +614,7 @@ void boardinit(){
             Serial.printf("Gateway: %s\n", gateway.c_str());
             Serial.printf("Subnet: %s\n", subnet.c_str());
             Serial.printf("DNS: %s\n", dns.c_str());
+            Serial.printf("MAC: %s\n", mac_str.c_str());
         }
         mac[5] = 0xEF;
         ethManager.setIPSettings(mac, useDHCP, ip.c_str(), subnet.c_str(), gateway.c_str(), dns.c_str());

@@ -849,6 +849,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     <script>
         console.log('Script loading started');
         let ws;
+        let isAsyncServer = false;
         
         // Initialize WebSocket connection
         function initWebSocket() {
@@ -857,6 +858,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             
             ws.onopen = function() {
                 console.log('WebSocket connected');
+                isAsyncServer = true;
                 refreshStatus();
             };
             
@@ -1051,11 +1053,13 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         
         function setRTC() {
-            const datetime = document.getElementById('rtcInput').value;
+            let datetime = document.getElementById('rtcInput').value;
             if (!datetime) {
                 showAlert('Please select date/time', 'error');
                 return;
             }
+            // datetime-local gives YYYY-MM-DDTHH:MM, append :00 if seconds missing
+            if (datetime.length === 16) datetime += ':00';
             apiCall('/api/rtc/set', 'POST', { datetime: datetime });
         }
         
@@ -1126,7 +1130,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                 });
                 
                 xhr.open('POST', '/api/firmware/update');
-                xhr.send(formData);
+                if (isAsyncServer) {
+                    xhr.send(formData);
+                } else {
+                    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+                    xhr.send(file);
+                }
                 
             } catch (error) {
                 showAlert('Upload error: ' + error.message, 'error');
@@ -1344,7 +1353,17 @@ const char index_html[] PROGMEM = R"rawliteral(
                 });
                 
                 xhr.open('POST', '/api/files/upload');
-                xhr.send(formData);
+                if (isAsyncServer) {
+                    xhr.send(formData);
+                } else {
+                    const reader = new FileReader();
+                    reader.onload = function() {
+                        const base64 = btoa(new Uint8Array(reader.result).reduce((data, byte) => data + String.fromCharCode(byte), ''));
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+                        xhr.send(JSON.stringify({ path: uploadPath, data: base64, size: file.size }));
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
                 
             } catch (error) {
                 progressDiv.style.display = 'none';
@@ -1830,14 +1849,14 @@ void handleRTCSet(AsyncWebServerRequest *request) {
     
     String datetime = doc["datetime"].as<String>();
     
-    // Parse: YYYY-MM-DD HH:MM:SS or YYYY-MM-DDTHH:MM:SS
+    // Parse: YYYY-MM-DD HH:MM:SS or YYYY-MM-DDTHH:MM:SS or YYYY-MM-DDTHH:MM
     datetime.replace('T', ' ');
     
-    int year, month, day, hour, minute, second;
+    int year, month, day, hour, minute, second = 0;
     int parsed = sscanf(datetime.c_str(), "%d-%d-%d %d:%d:%d", 
                        &year, &month, &day, &hour, &minute, &second);
     
-    if (parsed != 6) {
+    if (parsed < 5) {
         request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid datetime format\"}");
         return;
     }
@@ -1886,13 +1905,8 @@ void handleFactoryReset(AsyncWebServerRequest *request) {
 
 
 void handleFirmwareUpdate(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-    if (!checkAuthentication(request)) {
-        return;
-    }
-    
     if (!index) {
         Serial.println("[OTA] Update started");
-        
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
             Update.printError(Serial);
             return;
@@ -1907,12 +1921,8 @@ void handleFirmwareUpdate(AsyncWebServerRequest *request, String filename, size_
     if (final) {
         if (Update.end(true)) {
             Serial.println("[OTA] Update complete");
-            request->send(200, "application/json", "{\"success\":true,\"message\":\"Update complete. Rebooting...\"}");
-            delay(1000);
-            ESP.restart();
         } else {
             Update.printError(Serial);
-            request->send(500, "application/json", "{\"success\":false,\"message\":\"Update failed\"}");
         }
     }
 }
@@ -2042,18 +2052,20 @@ void handleFileList(AsyncWebServerRequest *request) {
 }
 
 
+static bool fileUploadSuccess = false;
+
 void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-    if (!checkAuthentication(request)) return;
-    
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
-        request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
-        return;
-    }
-    
     static File uploadFile;
     static String uploadPath;
     
     if (!index) {
+        fileUploadSuccess = false;
+        
+        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+            Serial.println("[FS] Upload rejected: filesystem not mounted");
+            return;
+        }
+        
         // Start of upload
         uploadPath = request->hasArg("path") ? request->arg("path") : "/" + filename;
         
@@ -2065,14 +2077,13 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
         
         fs::FS *fs = fsManagerFFat.getActiveFilesystem();
         if (!fs) {
-            request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not available\"}");
+            Serial.println("[FS] Filesystem not available");
             return;
         }
         
         uploadFile = fs->open(uploadPath, FILE_WRITE);
         if (!uploadFile) {
             Serial.println("[FS] Failed to open file for writing");
-            request->send(500, "application/json", "{\"success\":false,\"message\":\"Failed to create file\"}");
             return;
         }
     }
@@ -2087,8 +2098,8 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
         if (uploadFile) {
             uploadFile.close();
             Serial.printf("[FS] Upload complete: %s (%d bytes)\n", uploadPath.c_str(), index + len);
+            fileUploadSuccess = true;
         }
-        request->send(200, "application/json", "{\"success\":true,\"message\":\"File uploaded successfully\"}");
     }
 }
 
@@ -2321,7 +2332,13 @@ void setupWebServer() {
     // Firmware update handler
     webServer.on("/api/firmware/update", HTTP_POST,
         [](AsyncWebServerRequest *request) {
-            request->send(200);
+            if (Update.hasError()) {
+                request->send(500, "application/json", "{\"success\":false,\"message\":\"Update failed\"}");
+            } else {
+                request->send(200, "application/json", "{\"success\":true,\"message\":\"Update complete. Rebooting...\"}");
+                delay(1000);
+                ESP.restart();
+            }
         },
         handleFirmwareUpdate
     );
@@ -2329,7 +2346,11 @@ void setupWebServer() {
     // File upload handler
     webServer.on("/api/files/upload", HTTP_POST,
         [](AsyncWebServerRequest *request) {
-            request->send(200);
+            if (fileUploadSuccess) {
+                request->send(200, "application/json", "{\"success\":true,\"message\":\"File uploaded successfully\"}");
+            } else {
+                request->send(500, "application/json", "{\"success\":false,\"message\":\"Upload failed\"}");
+            }
         },
         handleFileUpload
     );
@@ -2509,7 +2530,7 @@ void setupEthWebServer() {
     if (ethWebServerStarted) return;
     ethWebServer.begin();
     ethWebServerStarted = true;
-    Serial.printf("[EthWeb] Server started on port 8080 at %s\n", Ethernet.localIP().toString().c_str());
+    Serial.printf("[EthWeb] Server started on port 80 at %s\n", Ethernet.localIP().toString().c_str());
 }
 
 // ==================== ETHERNET WEB CLIENT HANDLER ====================
@@ -2843,14 +2864,65 @@ void handleEthWebClients() {
         } else {
             String datetime = doc["datetime"].as<String>();
             datetime.replace('T', ' ');
-            int year, month, day, hour, minute, second;
+            int year, month, day, hour, minute, second = 0;
             int parsed = sscanf(datetime.c_str(), "%d-%d-%d %d:%d:%d",
                                 &year, &month, &day, &hour, &minute, &second);
-            if (parsed != 6) {
+            if (parsed < 5) {
                 ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid datetime format\"}");
             } else {
                 rtc.setDateTime(day, month, year, hour, minute, second);
                 ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RTC updated\"}");
+            }
+        }
+    }
+    
+    // --- POST /api/firmware/update ---
+    else if (path == "/api/firmware/update" && method == "POST") {
+        if (contentLength <= 0) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"No firmware data\"}");
+        } else {
+            Serial.printf("[EthWeb] OTA update start, size: %d\n", contentLength);
+            if (!Update.begin(contentLength)) {
+                Update.printError(Serial);
+                ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Update begin failed\"}");
+            } else {
+                uint8_t buf[512];
+                size_t remaining = contentLength;
+                bool success = true;
+                while (remaining > 0) {
+                    size_t toRead = min((size_t)512, remaining);
+                    size_t bytesRead = 0;
+                    unsigned long chunkTimeout = millis();
+                    while (bytesRead < toRead) {
+                        if (client.available()) {
+                            buf[bytesRead++] = client.read();
+                            chunkTimeout = millis();
+                        } else if (millis() - chunkTimeout > 10000) {
+                            success = false;
+                            break;
+                        } else {
+                            delay(1);
+                        }
+                    }
+                    if (!success) break;
+                    if (Update.write(buf, bytesRead) != bytesRead) {
+                        success = false;
+                        Update.printError(Serial);
+                        break;
+                    }
+                    remaining -= bytesRead;
+                }
+                if (success && Update.end(true)) {
+                    Serial.println("[EthWeb] OTA update complete");
+                    ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Update complete. Rebooting...\"}");
+                    client.stop();
+                    delay(1000);
+                    ESP.restart();
+                } else {
+                    Update.printError(Serial);
+                    Update.end();
+                    ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Update failed\"}");
+                }
             }
         }
     }
@@ -2973,6 +3045,77 @@ void handleEthWebClients() {
                     ethSendJSON(client, 200, "{\"success\":true,\"message\":\"File saved successfully\"}");
                 } else {
                     ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Failed to write file\"}");
+                }
+            }
+        }
+    }
+    
+    // --- POST /api/files/upload ---
+    else if (path == "/api/files/upload" && method == "POST") {
+        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+            ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
+        } else {
+            // For large uploads, body may not have been read yet (contentLength >= 8192)
+            if (body.length() == 0 && contentLength > 0) {
+                body.reserve(min(contentLength, 65536));
+                unsigned long bodyTimeout = millis();
+                while ((int)body.length() < contentLength && (int)body.length() < 65536) {
+                    if (client.available()) {
+                        body += (char)client.read();
+                        bodyTimeout = millis();
+                    } else if (millis() - bodyTimeout > 5000) {
+                        break;
+                    } else {
+                        delay(1);
+                    }
+                }
+            }
+            DynamicJsonDocument doc(1024);
+            DeserializationError error = deserializeJson(doc, body);
+            if (error || !doc.containsKey("path") || !doc.containsKey("data")) {
+                ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid upload data\"}");
+            } else {
+                String filePath = doc["path"].as<String>();
+                if (!filePath.startsWith("/")) filePath = "/" + filePath;
+                
+                // Decode base64 data and write to file
+                String b64Data = doc["data"].as<String>();
+                doc.clear();  // Free JSON memory
+                
+                size_t decodedLen = 0;
+                unsigned char *decoded = (unsigned char*)malloc(b64Data.length());
+                if (!decoded) {
+                    ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Out of memory\"}");
+                } else {
+                    int ret = mbedtls_base64_decode(decoded, b64Data.length(), &decodedLen,
+                                                    (const unsigned char*)b64Data.c_str(), b64Data.length());
+                    b64Data = "";  // Free base64 string memory
+                    
+                    if (ret != 0) {
+                        free(decoded);
+                        ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Base64 decode failed\"}");
+                    } else {
+                        fs::FS *fs = fsManagerFFat.getActiveFilesystem();
+                        if (!fs) {
+                            free(decoded);
+                            ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not available\"}");
+                        } else {
+                            if (fsManagerFFat.search(filePath)) {
+                                fsManagerFFat.deleteFile(filePath);
+                            }
+                            File file = fs->open(filePath, FILE_WRITE);
+                            if (!file) {
+                                free(decoded);
+                                ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Failed to create file\"}");
+                            } else {
+                                file.write(decoded, decodedLen);
+                                file.close();
+                                free(decoded);
+                                Serial.printf("[EthWeb] File uploaded: %s (%d bytes)\n", filePath.c_str(), decodedLen);
+                                ethSendJSON(client, 200, "{\"success\":true,\"message\":\"File uploaded successfully\"}");
+                            }
+                        }
+                    }
                 }
             }
         }

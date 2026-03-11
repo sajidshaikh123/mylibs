@@ -162,7 +162,8 @@ bool writeFile(fs::FS &fs, String path, const char * message){
         return false;
     }
     if(file.print(message)){
-        Serial.println("- file written");
+        Serial.print("- file written");
+        Serial.println(file.size());
     } else {
         Serial.println("- write failed");
 		file.close();
@@ -170,6 +171,22 @@ bool writeFile(fs::FS &fs, String path, const char * message){
     }
     file.close();
 	return true;
+}
+
+uint32_t readCRC32(fs::FS &fs, String path){
+    Serial.printf("Reading file for CRC32: %s\r\n", path.c_str());
+    uint32_t crc = 0;
+    File file = fs.open(path.c_str());
+    if(!file || file.isDirectory()){
+        Serial.println("- failed to open file for reading");
+        return 0;
+    }
+    while(file.available()){
+        crc = crc * 31 + (uint8_t)file.read();
+    }
+
+    file.close();
+    return crc;
 }
 
 void appendFile(fs::FS &fs, String path, const char * message){

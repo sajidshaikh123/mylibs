@@ -734,7 +734,7 @@ bool FilesystemManager::readJSONOBJ(const String &path, DynamicJsonDocument *&js
     }
     
 
-    jsonDoc = new DynamicJsonDocument(file.size() * 2); // Allocate double the file size for safety
+    jsonDoc = new DynamicJsonDocument(file.size() * 1.5); // Allocate double the file size for safety
 
     DeserializationError error = deserializeJson(*jsonDoc, file);
 
