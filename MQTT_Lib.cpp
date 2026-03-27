@@ -161,11 +161,11 @@ bool MQTT_Lib::connect() {
     
     
     // Mark as connected
-    // status["status"] = "connected";
-    // status["timestamp"] = rtc.getDateTime();
-    // serializeJsonPretty(status, buffer);
-    // PubSubClient::publish(getTopic("events/connection_status").c_str() , buffer,true) ;
-    // PubSubClient::publish(getTopic("status").c_str() , buffer) ;
+    status["status"] = "connected";
+    status["timestamp"] = rtc.getDateTime();
+    serializeJsonPretty(status, buffer);
+    PubSubClient::publish(getTopic("events/connection_status").c_str() , buffer,true) ;
+    PubSubClient::publish(getTopic("status").c_str() , buffer) ;
 
     return true;
 

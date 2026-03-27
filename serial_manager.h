@@ -54,7 +54,7 @@ void printHelp() {
     Serial.println("  subtopic [args]          - Subtopic configuration commands");
     Serial.println("  hmi [args]               - HMI display configuration commands");
     Serial.println("  tcpmodbus [args]            - TCP Modbus device management commands");
-    Serial.println("  rs485modbus [args]          - RS485 Modbus RTU commands");
+    Serial.println("  rs485modbus [args]          - RS485 Modbus RTU commands (baudrate, bits, parity, stopbits)");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
     Serial.println("");
     Serial.println("File System Commands:");
@@ -988,6 +988,7 @@ void handleRTCCommand(String args) {
         
         // Set RTC
         rtc.setDateTime(day, month, year, hour, minute, second);
+        HMI.Time_Stamp(day, month, year - 2000, hour, minute, second);
         
         Serial.println("[RTC] ✓ Date/time set successfully");
         Serial.printf("[RTC] New date/time: %s\n", rtc.getDateTime());
@@ -1000,11 +1001,77 @@ void handleRTCCommand(String args) {
 
 
 // ==================== RS485 MODBUS COMMAND HANDLER ====================
+
+// Helper: build UART config from individual components
+uint32_t buildSerialConfig(uint8_t dataBits, char parity, uint8_t stopBits) {
+    uint32_t cfg = SERIAL_8N1; // default
+    if (dataBits == 5 && parity == 'N' && stopBits == 1) cfg = SERIAL_5N1;
+    else if (dataBits == 5 && parity == 'N' && stopBits == 2) cfg = SERIAL_5N2;
+    else if (dataBits == 5 && parity == 'E' && stopBits == 1) cfg = SERIAL_5E1;
+    else if (dataBits == 5 && parity == 'E' && stopBits == 2) cfg = SERIAL_5E2;
+    else if (dataBits == 5 && parity == 'O' && stopBits == 1) cfg = SERIAL_5O1;
+    else if (dataBits == 5 && parity == 'O' && stopBits == 2) cfg = SERIAL_5O2;
+    else if (dataBits == 6 && parity == 'N' && stopBits == 1) cfg = SERIAL_6N1;
+    else if (dataBits == 6 && parity == 'N' && stopBits == 2) cfg = SERIAL_6N2;
+    else if (dataBits == 6 && parity == 'E' && stopBits == 1) cfg = SERIAL_6E1;
+    else if (dataBits == 6 && parity == 'E' && stopBits == 2) cfg = SERIAL_6E2;
+    else if (dataBits == 6 && parity == 'O' && stopBits == 1) cfg = SERIAL_6O1;
+    else if (dataBits == 6 && parity == 'O' && stopBits == 2) cfg = SERIAL_6O2;
+    else if (dataBits == 7 && parity == 'N' && stopBits == 1) cfg = SERIAL_7N1;
+    else if (dataBits == 7 && parity == 'N' && stopBits == 2) cfg = SERIAL_7N2;
+    else if (dataBits == 7 && parity == 'E' && stopBits == 1) cfg = SERIAL_7E1;
+    else if (dataBits == 7 && parity == 'E' && stopBits == 2) cfg = SERIAL_7E2;
+    else if (dataBits == 7 && parity == 'O' && stopBits == 1) cfg = SERIAL_7O1;
+    else if (dataBits == 7 && parity == 'O' && stopBits == 2) cfg = SERIAL_7O2;
+    else if (dataBits == 8 && parity == 'N' && stopBits == 1) cfg = SERIAL_8N1;
+    else if (dataBits == 8 && parity == 'N' && stopBits == 2) cfg = SERIAL_8N2;
+    else if (dataBits == 8 && parity == 'E' && stopBits == 1) cfg = SERIAL_8E1;
+    else if (dataBits == 8 && parity == 'E' && stopBits == 2) cfg = SERIAL_8E2;
+    else if (dataBits == 8 && parity == 'O' && stopBits == 1) cfg = SERIAL_8O1;
+    else if (dataBits == 8 && parity == 'O' && stopBits == 2) cfg = SERIAL_8O2;
+    return cfg;
+}
+
+// Helper: decode UART config to readable string
+void decodeSerialConfig(uint32_t cfg, uint8_t &dataBits, char &parity, uint8_t &stopBits) {
+    // Default
+    dataBits = 8; parity = 'N'; stopBits = 1;
+    if (cfg == SERIAL_5N1) { dataBits=5; parity='N'; stopBits=1; }
+    else if (cfg == SERIAL_5N2) { dataBits=5; parity='N'; stopBits=2; }
+    else if (cfg == SERIAL_5E1) { dataBits=5; parity='E'; stopBits=1; }
+    else if (cfg == SERIAL_5E2) { dataBits=5; parity='E'; stopBits=2; }
+    else if (cfg == SERIAL_5O1) { dataBits=5; parity='O'; stopBits=1; }
+    else if (cfg == SERIAL_5O2) { dataBits=5; parity='O'; stopBits=2; }
+    else if (cfg == SERIAL_6N1) { dataBits=6; parity='N'; stopBits=1; }
+    else if (cfg == SERIAL_6N2) { dataBits=6; parity='N'; stopBits=2; }
+    else if (cfg == SERIAL_6E1) { dataBits=6; parity='E'; stopBits=1; }
+    else if (cfg == SERIAL_6E2) { dataBits=6; parity='E'; stopBits=2; }
+    else if (cfg == SERIAL_6O1) { dataBits=6; parity='O'; stopBits=1; }
+    else if (cfg == SERIAL_6O2) { dataBits=6; parity='O'; stopBits=2; }
+    else if (cfg == SERIAL_7N1) { dataBits=7; parity='N'; stopBits=1; }
+    else if (cfg == SERIAL_7N2) { dataBits=7; parity='N'; stopBits=2; }
+    else if (cfg == SERIAL_7E1) { dataBits=7; parity='E'; stopBits=1; }
+    else if (cfg == SERIAL_7E2) { dataBits=7; parity='E'; stopBits=2; }
+    else if (cfg == SERIAL_7O1) { dataBits=7; parity='O'; stopBits=1; }
+    else if (cfg == SERIAL_7O2) { dataBits=7; parity='O'; stopBits=2; }
+    else if (cfg == SERIAL_8N1) { dataBits=8; parity='N'; stopBits=1; }
+    else if (cfg == SERIAL_8N2) { dataBits=8; parity='N'; stopBits=2; }
+    else if (cfg == SERIAL_8E1) { dataBits=8; parity='E'; stopBits=1; }
+    else if (cfg == SERIAL_8E2) { dataBits=8; parity='E'; stopBits=2; }
+    else if (cfg == SERIAL_8O1) { dataBits=8; parity='O'; stopBits=1; }
+    else if (cfg == SERIAL_8O2) { dataBits=8; parity='O'; stopBits=2; }
+}
+
 void printRS485ModbusHelp() {
     Serial.println("======= RS485 Modbus Commands ========");
-    Serial.println("  rs485modbus enable       - Enable RS485 Modbus RTU");
-    Serial.println("  rs485modbus disable      - Disable RS485 Modbus RTU");
-    Serial.println("  rs485modbus status       - Show RS485 Modbus status");
+    Serial.println("  rs485modbus enable               - Enable RS485 Modbus RTU");
+    Serial.println("  rs485modbus disable              - Disable RS485 Modbus RTU");
+    Serial.println("  rs485modbus baudrate <rate>       - Set baud rate (e.g. 9600, 19200, 115200)");
+    Serial.println("  rs485modbus databits <5|6|7|8>    - Set data bits");
+    Serial.println("  rs485modbus parity <none|even|odd> - Set parity");
+    Serial.println("  rs485modbus stopbits <1|2>        - Set stop bits");
+    Serial.println("  rs485modbus config                - Show current serial config");
+    Serial.println("  rs485modbus status               - Show RS485 Modbus status");
     Serial.println("Note: Changes require device reboot to take effect");
     Serial.println("======================================");
 }
@@ -1032,13 +1099,107 @@ void handleRS485ModbusCommand(String args) {
         rs485ModbusPref.end();
         Serial.println("[RS485Modbus] ✓ Disabled (reboot to apply)");
     }
+    else if (subCmd == "baudrate" || subCmd == "baud") {
+        if (subArgs.length() == 0) {
+            Serial.println("[RS485Modbus] ✗ Error: Baud rate required");
+            Serial.println("Usage: rs485modbus baudrate <rate>");
+            Serial.println("Common rates: 2400, 4800, 9600, 19200, 38400, 57600, 115200");
+            return;
+        }
+        uint32_t baud = (uint32_t)subArgs.toInt();
+        if (baud < 300 || baud > 921600) {
+            Serial.println("[RS485Modbus] ✗ Error: Invalid baud rate (300-921600)");
+            return;
+        }
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putULong("baudrate", baud);
+        rs485ModbusPref.end();
+        Serial.printf("[RS485Modbus] ✓ Baud rate set to %lu (reboot to apply)\n", baud);
+    }
+    else if (subCmd == "databits" || subCmd == "bits") {
+        uint8_t bits = (uint8_t)subArgs.toInt();
+        if (bits < 5 || bits > 8) {
+            Serial.println("[RS485Modbus] ✗ Error: Data bits must be 5, 6, 7, or 8");
+            return;
+        }
+        rs485ModbusPref.begin("rs485modbus", true);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+        rs485ModbusPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        decodeSerialConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = buildSerialConfig(bits, oldParity, oldStop);
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putULong("config", newCfg);
+        rs485ModbusPref.end();
+        Serial.printf("[RS485Modbus] ✓ Data bits set to %d (reboot to apply)\n", bits);
+    }
+    else if (subCmd == "parity") {
+        subArgs.toLowerCase();
+        char p;
+        if (subArgs == "none" || subArgs == "n") p = 'N';
+        else if (subArgs == "even" || subArgs == "e") p = 'E';
+        else if (subArgs == "odd" || subArgs == "o") p = 'O';
+        else {
+            Serial.println("[RS485Modbus] ✗ Error: Parity must be none, even, or odd");
+            return;
+        }
+        rs485ModbusPref.begin("rs485modbus", true);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+        rs485ModbusPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        decodeSerialConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = buildSerialConfig(oldBits, p, oldStop);
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putULong("config", newCfg);
+        rs485ModbusPref.end();
+        Serial.printf("[RS485Modbus] ✓ Parity set to %s (reboot to apply)\n", 
+            p == 'N' ? "None" : (p == 'E' ? "Even" : "Odd"));
+    }
+    else if (subCmd == "stopbits" || subCmd == "stop") {
+        uint8_t stop = (uint8_t)subArgs.toInt();
+        if (stop < 1 || stop > 2) {
+            Serial.println("[RS485Modbus] ✗ Error: Stop bits must be 1 or 2");
+            return;
+        }
+        rs485ModbusPref.begin("rs485modbus", true);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+        rs485ModbusPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        decodeSerialConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = buildSerialConfig(oldBits, oldParity, stop);
+        rs485ModbusPref.begin("rs485modbus", false);
+        rs485ModbusPref.putULong("config", newCfg);
+        rs485ModbusPref.end();
+        Serial.printf("[RS485Modbus] ✓ Stop bits set to %d (reboot to apply)\n", stop);
+    }
+    else if (subCmd == "config" || subCmd == "show") {
+        rs485ModbusPref.begin("rs485modbus", true);
+        uint32_t baud = rs485ModbusPref.getULong("baudrate", 9600);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+        rs485ModbusPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        decodeSerialConfig(cfg, bits, parity, stop);
+        Serial.println("=== RS485 Serial Config ===");
+        Serial.printf("  Baud rate:  %lu\n", baud);
+        Serial.printf("  Data bits:  %d\n", bits);
+        Serial.printf("  Parity:     %s\n", parity == 'N' ? "None" : (parity == 'E' ? "Even" : "Odd"));
+        Serial.printf("  Stop bits:  %d\n", stop);
+        Serial.printf("  Format:     %d%c%d\n", bits, parity, stop);
+        Serial.println("===========================");
+    }
     else if (subCmd == "status") {
         Serial.println("=== RS485 Modbus Status ===");
         rs485ModbusPref.begin("rs485modbus", true);
         Serial.printf("Enabled (saved): %s\n", rs485ModbusPref.getBool("modbus_enabled", false) ? "Yes" : "No");
         Serial.printf("Running: %s\n", rs485ModbusEnabled ? "Yes" : "No");
-        Serial.println("===========================");
+        uint32_t baud = rs485ModbusPref.getULong("baudrate", 9600);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
         rs485ModbusPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        decodeSerialConfig(cfg, bits, parity, stop);
+        Serial.printf("Baud rate:   %lu\n", baud);
+        Serial.printf("Format:      %d%c%d\n", bits, parity, stop);
+        Serial.println("===========================");
     }
     else {
         Serial.printf("[RS485Modbus] ✗ Unknown command: %s\n", subCmd.c_str());

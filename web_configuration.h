@@ -725,6 +725,42 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <label>Status</label>
                         <div class="value" id="rs485ModbusRunning">-</div>
                     </div>
+                    <div class="form-group">
+                        <label>Baud Rate</label>
+                        <select id="rs485Baudrate">
+                            <option value="2400">2400</option>
+                            <option value="4800">4800</option>
+                            <option value="9600" selected>9600</option>
+                            <option value="19200">19200</option>
+                            <option value="38400">38400</option>
+                            <option value="57600">57600</option>
+                            <option value="115200">115200</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Data Bits</label>
+                        <select id="rs485Databits">
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8" selected>8</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Parity</label>
+                        <select id="rs485Parity">
+                            <option value="N" selected>None</option>
+                            <option value="E">Even</option>
+                            <option value="O">Odd</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Stop Bits</label>
+                        <select id="rs485Stopbits">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                        </select>
+                    </div>
                     <p style="color: #666; font-size: 14px; margin-top: 10px;">
                         ⚠️ Changes require device reboot to take effect
                     </p>
@@ -1047,7 +1083,11 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         function saveRS485ModbusConfig() {
             const data = {
-                enabled: document.getElementById('rs485ModbusEnabled').checked
+                enabled: document.getElementById('rs485ModbusEnabled').checked,
+                baudrate: parseInt(document.getElementById('rs485Baudrate').value),
+                databits: parseInt(document.getElementById('rs485Databits').value),
+                parity: document.getElementById('rs485Parity').value,
+                stopbits: parseInt(document.getElementById('rs485Stopbits').value)
             };
             apiCall('/api/rs485modbus/config', 'POST', data);
         }
@@ -1058,14 +1098,16 @@ const char index_html[] PROGMEM = R"rawliteral(
                 showAlert('Please select date/time', 'error');
                 return;
             }
-            // datetime-local gives YYYY-MM-DDTHH:MM, append :00 if seconds missing
+            // Normalize: replace T with space, strip AM/PM, ensure seconds
+            datetime = datetime.replace('T', ' ').replace(/\s*(AM|PM)\s*/i, '');
             if (datetime.length === 16) datetime += ':00';
             apiCall('/api/rtc/set', 'POST', { datetime: datetime });
         }
         
         function syncRTCBrowser() {
             const now = new Date();
-            const datetime = now.toISOString().slice(0, 19).replace('T', ' ');
+            const pad = n => String(n).padStart(2, '0');
+            const datetime = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
             apiCall('/api/rtc/set', 'POST', { datetime: datetime });
         }
         
@@ -1500,6 +1542,10 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (rs485Config.success) {
                 document.getElementById('rs485ModbusEnabled').checked = rs485Config.enabled;
                 document.getElementById('rs485ModbusRunning').textContent = rs485Config.running ? 'Running' : 'Stopped';
+                document.getElementById('rs485Baudrate').value = rs485Config.baudrate || 9600;
+                document.getElementById('rs485Databits').value = rs485Config.databits || 8;
+                document.getElementById('rs485Parity').value = rs485Config.parity || 'N';
+                document.getElementById('rs485Stopbits').value = rs485Config.stopbits || 1;
             }
         }
         
@@ -1803,10 +1849,20 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     if (request->method() == HTTP_GET) {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
+        rs485ModbusPref.begin("rs485modbus", true);
         doc["success"] = true;
         doc["enabled"] = rs485ModbusPref.getBool("modbus_enabled", false);
         doc["running"] = rs485ModbusEnabled;
+        doc["baudrate"] = rs485ModbusPref.getULong("baudrate", 9600);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+        rs485ModbusPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        decodeSerialConfig(cfg, bits, parity, stop);
+        doc["databits"] = bits;
+        char parityStr[2] = {parity, '\0'};
+        doc["parity"] = parityStr;
+        doc["stopbits"] = stop;
         
         String response;
         serializeJson(doc, response);
@@ -1814,7 +1870,7 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
     }
     else if (request->method() == HTTP_POST) {
         String body = request->arg("plain");
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         
         DeserializationError error = deserializeJson(doc, body);
         if (error) {
@@ -1826,6 +1882,22 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
         
         if (doc.containsKey("enabled")) {
             rs485ModbusPref.putBool("modbus_enabled", doc["enabled"]);
+        }
+        if (doc.containsKey("baudrate")) {
+            rs485ModbusPref.putULong("baudrate", doc["baudrate"].as<uint32_t>());
+        }
+        if (doc.containsKey("databits") || doc.containsKey("parity") || doc.containsKey("stopbits")) {
+            uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+            uint8_t bits; char parity; uint8_t stop;
+            decodeSerialConfig(cfg, bits, parity, stop);
+            if (doc.containsKey("databits")) bits = doc["databits"].as<uint8_t>();
+            if (doc.containsKey("parity")) {
+                String p = doc["parity"].as<String>();
+                if (p.length() > 0) parity = p.charAt(0);
+            }
+            if (doc.containsKey("stopbits")) stop = doc["stopbits"].as<uint8_t>();
+            uint32_t newCfg = buildSerialConfig(bits, parity, stop);
+            rs485ModbusPref.putULong("config", newCfg);
         }
         
         rs485ModbusPref.end();
@@ -1862,6 +1934,7 @@ void handleRTCSet(AsyncWebServerRequest *request) {
     }
     
     rtc.setDateTime(day, month, year, hour, minute, second);
+    HMI.Time_Stamp(day, month, year - 2000, hour, minute, second);
     
     request->send(200, "application/json", "{\"success\":true,\"message\":\"RTC updated\"}");
 }
@@ -2829,12 +2902,20 @@ void handleEthWebClients() {
     
     // --- GET /api/rs485modbus/config ---
     else if (path == "/api/rs485modbus/config" && method == "GET") {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         rs485ModbusPref.begin("rs485modbus", true);
         doc["success"] = true;
         doc["enabled"] = rs485ModbusPref.getBool("modbus_enabled", false);
         doc["running"] = rs485ModbusEnabled;
+        doc["baudrate"] = rs485ModbusPref.getULong("baudrate", 9600);
+        uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
         rs485ModbusPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        decodeSerialConfig(cfg, bits, parity, stop);
+        doc["databits"] = bits;
+        char parityStr[2] = {parity, '\0'};
+        doc["parity"] = parityStr;
+        doc["stopbits"] = stop;
         
         String response;
         serializeJson(doc, response);
@@ -2843,13 +2924,27 @@ void handleEthWebClients() {
     
     // --- POST /api/rs485modbus/config ---
     else if (path == "/api/rs485modbus/config" && method == "POST") {
-        DynamicJsonDocument doc(256);
+        DynamicJsonDocument doc(512);
         DeserializationError error = deserializeJson(doc, body);
         if (error) {
             ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
         } else {
             rs485ModbusPref.begin("rs485modbus", false);
             if (doc.containsKey("enabled")) rs485ModbusPref.putBool("modbus_enabled", doc["enabled"]);
+            if (doc.containsKey("baudrate")) rs485ModbusPref.putULong("baudrate", doc["baudrate"].as<uint32_t>());
+            if (doc.containsKey("databits") || doc.containsKey("parity") || doc.containsKey("stopbits")) {
+                uint32_t cfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
+                uint8_t bits; char parity; uint8_t stop;
+                decodeSerialConfig(cfg, bits, parity, stop);
+                if (doc.containsKey("databits")) bits = doc["databits"].as<uint8_t>();
+                if (doc.containsKey("parity")) {
+                    String p = doc["parity"].as<String>();
+                    if (p.length() > 0) parity = p.charAt(0);
+                }
+                if (doc.containsKey("stopbits")) stop = doc["stopbits"].as<uint8_t>();
+                uint32_t newCfg = buildSerialConfig(bits, parity, stop);
+                rs485ModbusPref.putULong("config", newCfg);
+            }
             rs485ModbusPref.end();
             ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RS485 Modbus config saved. Reboot required.\"}");
         }
@@ -2871,6 +2966,7 @@ void handleEthWebClients() {
                 ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid datetime format\"}");
             } else {
                 rtc.setDateTime(day, month, year, hour, minute, second);
+                HMI.Time_Stamp(day, month, year - 2000, hour, minute, second);
                 ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RTC updated\"}");
             }
         }

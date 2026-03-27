@@ -82,7 +82,7 @@ class MQTTPublisher {
                 String fullTopic = mqttClient->getTopic(topic); // Call getTopic only once
                 String payload;
                 serializeJson(*doc, payload);
-                Serial.println("[MQTT PUBLISH] Topic: " + fullTopic);
+                // Serial.println("[MQTT PUBLISH] Topic: " + fullTopic);
                 send_flag = !mqttClient->publish(fullTopic.c_str(), payload.c_str(), retained);
                 yield(); // Feed watchdog after MQTT operations
             }
