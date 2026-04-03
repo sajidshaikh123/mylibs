@@ -23,7 +23,7 @@ uint8_t dwin_input[20] = { 0 };
 volatile uint8_t dwin_rec_flag = 0;
 
 void dwinLoop() {
-  while (1 == upload_flag) {
+  while (true == upload_flag) {
     yield(); // Feed watchdog during upload mode
     while (HMI.available()) {
       Serial.write(HMI.read());
