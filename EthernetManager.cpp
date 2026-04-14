@@ -1,5 +1,8 @@
 #include "EthernetManager.h"
 #include "pindefinition.h"
+#include "delayTimer.h"
+
+DelayTimer ethReconnectTimer(5000); // 5 second delay for reconnection attempts
 
 EthernetManager::EthernetManager(uint8_t sck , uint8_t miso , uint8_t mosi , uint8_t cs , uint8_t rst )
   : ethernet_CS(cs), ethernet_RST(rst) {
@@ -29,6 +32,8 @@ void EthernetManager::setIPSettings(const uint8_t* mac, bool useDHCP,
 
 void EthernetManager::begin() {
     // Ethernet.softReset();
+    // if (!spiMutex) spiMutex = xSemaphoreCreateMutex();
+
     digitalWrite(RST_PIN,LOW);
     delay(10);
     digitalWrite(RST_PIN,HIGH);
@@ -52,34 +57,58 @@ void EthernetManager::begin() {
         Ethernet.setDnsServerIP(myDNS);
     }
 
-    // Serial.println(Ethernet.localIP());
-    // Serial.println(Ethernet.subnetMask());
-    // Serial.println(Ethernet.gatewayIP());
-    // Serial.println(Ethernet.dnsServerIP());
+    Serial.println("Ethernet Initialized with IP:");
+    Serial.println(Ethernet.localIP());
+    Serial.println(Ethernet.subnetMask());
+    Serial.println(Ethernet.gatewayIP());
+    Serial.println(Ethernet.dnsServerIP());
 }
 
 uint8_t EthernetManager::status() {
     return (linkStatus);
 }
+
 void EthernetManager::poll() {
+    // if (spiMutex && xSemaphoreTake(spiMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        uint8_t currentStatus = Ethernet.linkStatus();
+        // xSemaphoreGive(spiMutex);
+        
+        if (currentStatus != linkStatus) {
+            linkStatus = currentStatus;
+        }
+        if (linkStatus == Unknown || linkStatus == LinkOFF) {
+            if(ethReconnectTimer.ontime()){
+                Serial.println("Ethernet link down - attempting to reconnect...");
+                begin();
+            }
+            // if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+            //     begin();
+            //     xSemaphoreGive(spiMutex);
+            // }
+        }
+    //}
+}
+
+// void EthernetManager::poll() {
 
   
-  uint8_t currentStatus = Ethernet.linkStatus();
-  if (currentStatus != linkStatus) {
-    linkStatus = currentStatus;
-    // if (linkStatus == Unknown || linkStatus == LinkOFF) {
-    //   // Serial.println(" Ethernet Disconnected");
+//   uint8_t currentStatus = Ethernet.linkStatus();
+//   if (currentStatus != linkStatus) {
+//     linkStatus = currentStatus;
+//     // if (linkStatus == Unknown || linkStatus == LinkOFF) {
+//     //   // Serial.println(" Ethernet Disconnected");
       
-    // } else {
-    //   // Serial.println(" Ethernet Connected");
-    //   // Serial.println(Ethernet.localIP());
-    // }
-  }
-  if (linkStatus == Unknown || linkStatus == LinkOFF) {
-      begin();
-  }
-//   Serial.println("STATUS : "+String(currentStatus));
-}
+//     // } else {
+//     //   // Serial.println(" Ethernet Connected");
+//     //   // Serial.println(Ethernet.localIP());
+//     // }
+//   }
+//   if (linkStatus == Unknown || linkStatus == LinkOFF) {
+      
+//       begin();
+//   }
+// //   Serial.println("STATUS : "+String(currentStatus));
+// }
 
 // Static polling task function
 void EthernetManager::pollTask(void* pvParameters) {

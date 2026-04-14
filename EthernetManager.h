@@ -8,6 +8,7 @@
 
 class EthernetManager {
   public:
+    // SemaphoreHandle_t spiMutex = nullptr;
     EthernetManager(uint8_t sck , uint8_t miso , uint8_t mosi , uint8_t cs , uint8_t rst );
     EthernetManager();
     void setIPSettings(const uint8_t* mac, bool useDHCP, const char* ip, const char* subnet, const char* gateway, const char* dns);

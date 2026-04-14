@@ -198,7 +198,7 @@ void mqttcallbackmain(char *topic, byte *payload, unsigned int length)
     // Add bounds checking to prevent heap corruption
     if(length > 4096) {
         Serial.printf("⚠ Warning: MQTT message too large (%u bytes), truncating\n", length);
-        length = 4096;
+        // length = 4096;
     }
 
     if (mqtt_callback) {
@@ -621,7 +621,7 @@ void boardinit(){
         yield();
         ethManager.begin();
         yield();
-        ethManager.startPolling(1, 2000); // Poll every 2 seconds on core 1
+        ethManager.startPolling(1, 500); // Poll every 100 milliseconds on core 1
     }else{
         Serial.println("Ethernet not enabled in preferences.");
     }
@@ -704,6 +704,9 @@ void boardloop(){
 
     yield(); // Feed watchdog at start
     
+    // if (ethManager.spiMutex) xSemaphoreTake(ethManager.spiMutex, portMAX_DELAY);
+
+
     if(syncServerStarted) {
         syncServer.handleClient();
     }
@@ -943,6 +946,16 @@ void boardloop(){
                     if (mqtt_connected && !prev_mqtt_connected) {
                         Serial.println("[MQTT] Connected - publishing peripheral status...");
                         publishPeripheralStatus();
+
+                        DynamicJsonDocument status(100);
+    
+                        status["status"] = "connected";
+                        status["timestamp"] = rtc.getDateTime();
+                        char buffer[200];
+                        serializeJsonPretty(status, buffer);
+                        Serial.println(buffer);
+                        mqtt_obj.publish(mqtt_obj.getTopic("events/connection_status").c_str() , buffer,true) ;
+                        mqtt_obj.publish(mqtt_obj.getTopic("status").c_str() , buffer) ;
                     }
                     prev_mqtt_connected = mqtt_connected;
                 }else if(mqttTransport == "ethernet"){
@@ -954,6 +967,16 @@ void boardloop(){
                         if (mqtt_connected && !prev_mqtt_connected) {
                             Serial.println("[MQTT] Connected - publishing peripheral status...");
                             publishPeripheralStatus();
+
+                            DynamicJsonDocument status(100);
+    
+                            status["status"] = "connected";
+                            status["timestamp"] = rtc.getDateTime();
+                            char buffer[200];
+                            serializeJsonPretty(status, buffer);
+                            Serial.println(buffer);
+                            mqtt_obj.publish(mqtt_obj.getTopic("events/connection_status").c_str() , buffer,true) ;
+                            mqtt_obj.publish(mqtt_obj.getTopic("status").c_str() , buffer) ;
                         }
                         prev_mqtt_connected = mqtt_connected;
                     } else {

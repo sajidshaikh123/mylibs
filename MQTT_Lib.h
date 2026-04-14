@@ -19,6 +19,11 @@ class MQTT_Lib : public PubSubClient {
 public:
     MQTT_Lib();
     String getTopic(String request); // Construct full topic string
+    String getcompany();
+    String getlocation();
+    String getdepartment();
+    String getline();
+    String getmachine();
     void config(const char *ip, uint16_t port, const char *user, const char *password, const char *willMsg, Client &client);
     void setMacAddress(String temp_mac);
     void setClient(Client &client);

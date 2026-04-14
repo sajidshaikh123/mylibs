@@ -27,6 +27,22 @@ String MQTT_Lib::getMacAddress(){
 // Generate full topic string based on configuration
 // Update the getTopic function with flexible key validation
 
+String MQTT_Lib::getmachine(){
+    return cached_machine;
+}
+String MQTT_Lib::getcompany(){
+    return cached_company;
+}
+String MQTT_Lib::getlocation(){
+    return cached_location;
+}
+String MQTT_Lib::getdepartment(){
+    return cached_department;
+}
+String MQTT_Lib::getline(){
+    return cached_line;
+}
+
 String MQTT_Lib::getTopic(String request) {
     String temp_topic = "empty";
 

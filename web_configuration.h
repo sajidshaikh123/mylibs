@@ -772,19 +772,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div id="files" class="tab-content">
                 <div class="card">
                     <h3>File Manager</h3>
-                    <div class="info-grid" style="grid-template-columns: 1fr;">
-                        <div class="info-item">
-                            <label>Filesystem</label>
-                            <div class="value" id="fsType">SPIFFS</div>
+                    <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                        <span style="font-weight: 600; color: #667eea;" id="fsType">FFat</span>
+                        <div style="flex: 1; min-width: 200px; background: #e9ecef; border-radius: 8px; overflow: hidden; height: 24px; position: relative;">
+                            <div id="fsProgressBar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); height: 100%; width: 0%; transition: width 0.5s; border-radius: 8px;"></div>
+                            <span id="fsProgressText" style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #333;">-</span>
                         </div>
-                        <div class="info-item">
-                            <label>Total Space</label>
-                            <div class="value" id="fsTotal">-</div>
-                        </div>
-                        <div class="info-item">
-                            <label>Used Space</label>
-                            <div class="value" id="fsUsed">-</div>
-                        </div>
+                        <span style="font-size: 13px; color: #666; white-space: nowrap;"><span id="fsUsed">-</span> / <span id="fsTotal">-</span></span>
                     </div>
                 </div>
                 
@@ -1255,9 +1249,14 @@ const char index_html[] PROGMEM = R"rawliteral(
                     const fsType = document.getElementById('fsType');
                     const fsTotal = document.getElementById('fsTotal');
                     const fsUsed = document.getElementById('fsUsed');
+                    const fsProgressBar = document.getElementById('fsProgressBar');
+                    const fsProgressText = document.getElementById('fsProgressText');
                     if (fsType && data.fsType) fsType.textContent = data.fsType;
                     if (fsTotal) fsTotal.textContent = formatBytes(data.total);
-                    if (fsUsed) fsUsed.textContent = formatBytes(data.used) + ' (' + Math.round((data.used / data.total) * 100) + '%)';
+                    if (fsUsed) fsUsed.textContent = formatBytes(data.used);
+                    const pct = data.total > 0 ? Math.round((data.used / data.total) * 100) : 0;
+                    if (fsProgressBar) fsProgressBar.style.width = pct + '%';
+                    if (fsProgressText) fsProgressText.textContent = pct + '% used';
                 } else {
                     showAlert('Failed to load files', 'error');
                 }
@@ -1681,6 +1680,7 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     if (request->method() == HTTP_GET) {
+        ethernetPref.begin("ethernet", true);
         DynamicJsonDocument doc(512);
         doc["success"] = true;
         doc["enabled"] = ethernetPref.getBool("enabled", true);
@@ -1689,6 +1689,7 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
         doc["gateway"] = ethernetPref.getString("gateway", "");
         doc["subnet"] = ethernetPref.getString("subnet", "");
         doc["dns"] = ethernetPref.getString("dns", "");
+        ethernetPref.end();
         
         String response;
         serializeJson(doc, response);
@@ -2316,29 +2317,48 @@ void handleFileRead(AsyncWebServerRequest *request) {
         return;
     }
     
-    DynamicJsonDocument doc(8192);
+    size_t docSize = max((size_t)1024, content.length() * 2 + 512);
+    DynamicJsonDocument doc(docSize);
     doc["success"] = true;
     doc["content"] = content;
     doc["path"] = path;
+    
+    // Free content memory before serializing
+    content = String();
     
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
     
-    Serial.printf("[FS] Read: %s (%d bytes)\n", path.c_str(), content.length());
+    Serial.printf("[FS] Read: %s (%d bytes)\n", path.c_str(), doc["content"].as<String>().length());
 }
 
+
+String _fileWriteBody = "";
+
+void handleFileWriteBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    if (index == 0) {
+        _fileWriteBody = "";
+        _fileWriteBody.reserve(total);
+    }
+    for (size_t i = 0; i < len; i++) {
+        _fileWriteBody += (char)data[i];
+    }
+}
 
 void handleFileWrite(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
+        _fileWriteBody = "";
         return;
     }
     
-    String body = request->arg("plain");
-    DynamicJsonDocument doc(8192);
+    String body = _fileWriteBody;
+    _fileWriteBody = "";
+    size_t docSize = max((size_t)1024, body.length() * 2 + 512);
+    DynamicJsonDocument doc(docSize);
     
     DeserializationError error = deserializeJson(doc, body);
     if (error) {
@@ -2381,7 +2401,7 @@ void setupWebServer() {
     });
     
     // Initialize filesystem
-    initFilesystem();
+    // initFilesystem();
     
     // API Routes
     webServer.on("/api/status", HTTP_GET, handleGetStatus);
@@ -2398,7 +2418,7 @@ void setupWebServer() {
     // File management routes
     webServer.on("/api/files/list", HTTP_GET, handleFileList);
     webServer.on("/api/files/read", HTTP_GET, handleFileRead);
-    webServer.on("/api/files/write", HTTP_POST, handleFileWrite);
+    webServer.on("/api/files/write", HTTP_POST, handleFileWrite, NULL, handleFileWriteBody);
     webServer.on("/api/files/download", HTTP_GET, handleFileDownload);
     webServer.on("/api/files/delete", HTTP_ANY, handleFileDelete);
     
@@ -2768,6 +2788,7 @@ void handleEthWebClients() {
     
     // --- GET /api/ethernet/config ---
     else if (path == "/api/ethernet/config" && method == "GET") {
+        ethernetPref.begin("ethernet", true);
         DynamicJsonDocument doc(512);
         doc["success"] = true;
         doc["enabled"] = ethernetPref.getBool("enabled", true);
@@ -2776,6 +2797,7 @@ void handleEthWebClients() {
         doc["gateway"] = ethernetPref.getString("gateway", "");
         doc["subnet"] = ethernetPref.getString("subnet", "");
         doc["dns"] = ethernetPref.getString("dns", "");
+        ethernetPref.end();
         
         String response;
         serializeJson(doc, response);
@@ -3110,10 +3132,12 @@ void handleEthWebClients() {
                 if (content.length() == 0 && !fsManagerFFat.search(filePath)) {
                     ethSendJSON(client, 404, "{\"success\":false,\"message\":\"File not found\"}");
                 } else {
-                    DynamicJsonDocument doc(8192);
+                    size_t docSize = max((size_t)1024, content.length() * 2 + 512);
+                    DynamicJsonDocument doc(docSize);
                     doc["success"] = true;
                     doc["content"] = content;
                     doc["path"] = filePath;
+                    content = String();
                     String response;
                     serializeJson(doc, response);
                     ethSendJSON(client, 200, response);
@@ -3127,7 +3151,8 @@ void handleEthWebClients() {
         if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
             ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         } else {
-            DynamicJsonDocument doc(8192);
+            size_t docSize = max((size_t)1024, body.length() * 2 + 512);
+            DynamicJsonDocument doc(docSize);
             DeserializationError error = deserializeJson(doc, body);
             if (error) {
                 ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
