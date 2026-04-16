@@ -76,8 +76,17 @@ RTCManager rtc(0);
 #include "serial_manager.h"
 #include "shift_timing.h"
 #include "mqtt_publisher.h"
+
+// Forward-declare globals needed by firmware_update.h and mac_process.h
+// (actual usage is below after all includes)
+DynamicJsonDocument subtopic(512);
+FilesystemManager fsManagerFFat(FilesystemType::FFAT);
+MQTT_Lib mqtt_obj;
+
+#include "firmware_update.h"
+#include "mac_process.h"
+
 // #include "opcua_server.h"
-// #include "firmware_update.h"  // Moved to end because it depends on other libraries
 
 
 // Web configuration MUST be included BEFORE WiFi_manager to avoid HTTP method conflicts
@@ -167,14 +176,8 @@ Preferences rs485ModbusPref;
 
 String mqttTransport = "auto"; // Cache MQTT transport type
 
-// Subtopic JSON document (used by MQTT)
-DynamicJsonDocument subtopic(512);
-
-
+// subtopic, fsManagerFFat, mqtt_obj declared above (before firmware_update.h / mac_process.h)
 #define FILE_SYSTEM FFat
-FilesystemManager fsManagerFFat(FilesystemType::FFAT);
-
-MQTT_Lib mqtt_obj;
 
 unsigned long execution_timer = 0;
 
@@ -201,7 +204,22 @@ void mqttcallbackmain(char *topic, byte *payload, unsigned int length)
         // length = 4096;
     }
 
-    if (mqtt_callback) {
+    String _topic_str = String(topic);
+    String message = "";
+    for (unsigned int i = 0; i < length; i++) {
+        message += String((char)payload[i]);
+    }
+
+    splitTopic(_topic_str, "/");
+
+    if (split_data[1].equals(mac_str)) {
+        Serial.println("IN MAC");
+        Serial.print(_topic_str + ":");
+        Serial.println(message);
+
+        processMac(split_data[2],message);
+
+    }else if (mqtt_callback) {
         mqtt_callback(topic, payload, length);
     }else{
         Serial.print("Message arrived [");

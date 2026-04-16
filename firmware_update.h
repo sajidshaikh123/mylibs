@@ -3,6 +3,7 @@
 #include <HTTPClient.h>
 #include <Ethernet.h>   
 #include <ArduinoJson.h>
+#include "esp_ota_ops.h"
 
 // Callback function type for progress updates
 typedef void (*OTAProgressCallback)(int progress, size_t currentBytes, size_t totalBytes, const String& status);
@@ -12,7 +13,6 @@ void publishOTAStatus(const String& status, const String& message);
 
 // OTA Update variables
 extern uint8_t conn_status; // 0: no connection, 1: connected, 2: authenticated
-extern MQTT_Lib mqtt_obj;
 
 bool ota_in_progress = false;
 String ota_url = "";
