@@ -732,10 +732,7 @@ void boardloop(){
         handleEthWeb();
     }
 
-    if(rs485ModbusEnabled){
-        modbusLoop(); // Disabled - ModbusRTU causes FreeRTOS assert failed: xQueueSemaphoreTake queue.c:1713
-        yield();
-    }
+    modbusLoop(); // Disabled - ModbusRTU causes FreeRTOS assert failed: xQueueSemaphoreTake queue.c:1713
     
     // Non-blocking WiFi initialization state machine
     if (wifiEnabled && wifi_init_state < 5) {

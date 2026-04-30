@@ -29,8 +29,8 @@ void modbusInit(){
     uint32_t serialCfg = rs485ModbusPref.getULong("config", SERIAL_8N1);
     rs485ModbusPref.end();
     RTUSerial.begin(baud, serialCfg, RX2_PIN, TX2_PIN);
-    RTUSerial.setTimeout(500);
-    RTUSerial.setRxTimeout(100);
+    RTUSerial.setTimeout(200);
+    RTUSerial.setRxTimeout(200);
     mb.begin(&RTUSerial);
     mb.master();
     

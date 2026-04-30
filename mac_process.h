@@ -294,7 +294,7 @@ void processMac(String topic,String message){
         
         // Save to Preferences (NVS)
         Preferences subtopicPref;
-        subtopicPref.begin("subtopic", false);
+        subtopicPref.begin("subtopics", false);
         subtopicPref.putString("company", tempSubtopic["company_name"].as<String>());
         subtopicPref.putString("location", tempSubtopic["location"].as<String>());
         subtopicPref.putString("department", tempSubtopic["department"].as<String>());
