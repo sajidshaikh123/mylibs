@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "E:/Embedsol/Yearly Data/Development/ESP32/Profinet"
+		},
+		{
+			"path": "E:/Embedsol/Yearly Data/Development/ESP32/profinet_code/profinet_ESP32S3"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}

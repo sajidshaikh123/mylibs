@@ -193,6 +193,17 @@ String MQTT_Lib::getMacTopic(String request){
 }
 
 
+// FreeRTOS background task: runs connect() so the main loop never blocks.
+// Deletes itself when done (one-shot per attempt).
+void MQTT_Lib::_connectTaskFn(void *pvParameters) {
+    MQTT_Lib *self = static_cast<MQTT_Lib*>(pvParameters);
+    Serial.println("connecting to MQTT");
+    self->connect();
+    self->_connecting        = false;
+    self->_connectTaskHandle = NULL;
+    vTaskDelete(NULL);
+}
+
 // Handle MQTT loop operations with a 50ms interval
 void MQTT_Lib::loop() {
     if ((millis() - loop_timer) >= MQTT_LOOP_INTERVAL) {
@@ -201,11 +212,13 @@ void MQTT_Lib::loop() {
             PubSubClient::loop();  // Maintain MQTT connection and handle incoming messages
             mqtt_timer = millis();
         } else {
-            // If disconnected, attempt reconnection at defined intervals
-            if ((millis() - mqtt_timer) > MQTT_RECONNECT_INTERVAL) {
-                mqtt_timer = millis();
-                Serial.println("connecting to MQTT");
-                connect();
+            // If disconnected, spawn a background task to reconnect so connect()
+            // doesn't block the main loop for ~3 s on each failed attempt.
+            if (!_connecting && (millis() - mqtt_timer) > MQTT_RECONNECT_INTERVAL) {
+                mqtt_timer  = millis();
+                _connecting = true;
+                xTaskCreate(_connectTaskFn, "mqtt_conn", 4096, this, 1,
+                            &_connectTaskHandle);
             }
         }
     }

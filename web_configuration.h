@@ -11,7 +11,9 @@
 #include <Update.h>
 #include "RTCManager.h"
 #include "FilesystemManager.h"
+#include "MQTT_Lib.h"
 #include "mbedtls/base64.h"
+#include "esp_partition.h"
 
 // Prevent HTTP method enum conflicts between ESPAsyncWebServer and ESP32 WebServer
 // Undefine the conflicting macros from ESPAsyncWebServer before other libraries include WebServer
@@ -29,9 +31,13 @@ extern Preferences ethernetPref;
 extern Preferences mqttPref;
 extern Preferences hmiPref;
 extern Preferences rs485ModbusPref;
+extern Preferences settingsPref;
 extern bool rs485ModbusEnabled;
+extern bool usbScannerEnabled;
+extern String lastResetReason;
 extern RTCManager rtc;
 extern FilesystemManager fsManagerFFat;
+extern MQTT_Lib mqtt_obj;
 
 // Web server on port 80
 AsyncWebServer webServer(80);
@@ -46,14 +52,12 @@ bool web_auth_enabled = true;
 // Server state
 bool webServerStarted = false;
 bool ethWebServerStarted = false;
-bool filesystemMounted = false;
 
 // Forward declarations
 void setupWebServer();
 void handleWebSocketMessage(void *arg, uint8_t *data, size_t len);
 String getSystemStatusJSON();
 String getNetworkStatusJSON();
-void initFilesystem();
 
 // Ethernet web server forward declarations
 void setupEthWebServer();
@@ -68,23 +72,6 @@ String getEthernetMACString() {
     sprintf(macStr, "%02X:%02X:%02X:%02X:%02X:%02X", 
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     return String(macStr);
-}
-
-// Initialize filesystem
-void initFilesystem() {
-    if (filesystemMounted) return;
-    
-    if (!fsManagerFFat.isFilesystemMounted()) {
-        if (!fsManagerFFat.init()) {
-            Serial.println("[FS] Filesystem mount failed!");
-            return;
-        }
-    }
-    
-    filesystemMounted = true;
-    Serial.printf("[FS] %s mounted successfully\n", fsManagerFFat.getFilesystemName().c_str());
-    Serial.printf("[FS] Total: %d bytes, Used: %d bytes, Free: %d bytes\n", 
-                  fsManagerFFat.totalBytes(), fsManagerFFat.usedBytes(), fsManagerFFat.freeBytes());
 }
 
 
@@ -494,6 +481,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <button class="tab" onclick="showTab('rtc', this)">🕐 RTC</button>
             <button class="tab" onclick="showTab('hmi', this)">🖥️ HMI</button>
             <button class="tab" onclick="showTab('rs485modbus', this)">🔌 RS485</button>
+            <button class="tab" onclick="showTab('io', this)">⚡ IO</button>
             <button class="tab" onclick="showTab('files', this)">📁 Files</button>
             <button class="tab" onclick="showTab('firmware', this)">⬆️ Firmware</button>
             <button class="tab" onclick="showTab('settings', this)">⚙️ Settings</button>
@@ -552,7 +540,49 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <h3>Actions</h3>
                     <button class="btn btn-primary" onclick="refreshStatus()">🔄 Refresh Status</button>
                     <button class="btn btn-secondary" onclick="rebootDevice()">🔁 Reboot Device</button>
-                    <button class="btn btn-danger" onclick="factoryReset()">⚠️ Factory Reset</button>
+                    <button class="btn btn-danger" onclick="factoryReset()">&#9888;&#65039; Factory Reset</button>
+                </div>
+
+                <div class="card">
+                    <h3>Reset Information</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>Last Reset Reason</label>
+                            <div class="value" id="resetReason">-</div>
+                        </div>
+                        <div class="info-item">
+                            <label>Total Boots</label>
+                            <div class="value" id="totalBoots">-</div>
+                        </div>
+                    </div>
+                    <table style="width:100%;margin-top:12px;border-collapse:collapse;font-size:14px;">
+                        <thead>
+                            <tr style="background:rgba(102,126,234,0.1);">
+                                <th style="padding:6px 10px;text-align:left;">Reason</th>
+                                <th style="padding:6px 10px;text-align:right;">Count</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resetCountersBody"></tbody>
+                    </table>
+                </div>
+
+                <div class="card">
+                    <h3>Partition Table</h3>
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%;border-collapse:collapse;font-size:13px;font-family:monospace;">
+                            <thead>
+                                <tr style="background:rgba(102,126,234,0.1);">
+                                    <th style="padding:6px 8px;text-align:left;">Label</th>
+                                    <th style="padding:6px 8px;text-align:left;">Type</th>
+                                    <th style="padding:6px 8px;text-align:left;">SubType</th>
+                                    <th style="padding:6px 8px;text-align:right;">Address</th>
+                                    <th style="padding:6px 8px;text-align:right;">Size</th>
+                                </tr>
+                            </thead>
+                            <tbody id="partitionTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div style="margin-top:10px;font-size:13px;color:#888;" id="flashInfo">-</div>
                 </div>
             </div>
             
@@ -574,6 +604,46 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="form-group">
                         <label>Password</label>
                         <input type="password" id="wifiPassword" placeholder="Enter WiFi password">
+                    </div>
+                    <div class="form-group">
+                        <label>DHCP Mode</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="wifiDhcp" onchange="toggleWiFiStaticIP()" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="wifiStaticIpFields" style="display:none;">
+                        <div class="form-group">
+                            <label>IP Address</label>
+                            <input type="text" id="wifiIp" placeholder="192.168.1.100">
+                        </div>
+                        <div class="form-group">
+                            <label>Gateway</label>
+                            <input type="text" id="wifiGateway" placeholder="192.168.1.1">
+                        </div>
+                        <div class="form-group">
+                            <label>Subnet Mask</label>
+                            <input type="text" id="wifiSubnet" placeholder="255.255.255.0">
+                        </div>
+                        <div class="form-group">
+                            <label>DNS Server</label>
+                            <input type="text" id="wifiDns" placeholder="8.8.8.8">
+                        </div>
+                    </div>
+                    <div id="wifiLiveCard" style="background:#f8f9fa;border-radius:6px;padding:12px 14px;margin-bottom:16px;border-left:4px solid #ccc;">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <span style="font-weight:600;font-size:13px;color:#555;">Live Status</span>
+                            <span id="wifiLiveBadge" class="status disconnected">Disconnected</span>
+                            <button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;margin:0;" onclick="loadNetworkStatus()">🔄 Refresh</button>
+                        </div>
+                        <div id="wifiLiveDetails" style="display:none;margin-top:10px;">
+                            <div class="info-grid">
+                                <div class="info-item"><label>IP Address</label><div class="value" id="wifiLiveIp">-</div></div>
+                                <div class="info-item"><label>Subnet Mask</label><div class="value" id="wifiLiveSubnet">-</div></div>
+                                <div class="info-item"><label>Gateway</label><div class="value" id="wifiLiveGw">-</div></div>
+                                <div class="info-item"><label>Signal (RSSI)</label><div class="value" id="wifiLiveRssi">-</div></div>
+                            </div>
+                        </div>
                     </div>
                     <button class="btn btn-primary" onclick="saveWiFiConfig()">💾 Save WiFi Config</button>
                     <button class="btn btn-secondary" onclick="scanWiFi()">🔍 Scan Networks</button>
@@ -613,6 +683,20 @@ const char index_html[] PROGMEM = R"rawliteral(
                             <input type="text" id="ethDns" placeholder="8.8.8.8">
                         </div>
                     </div>
+                    <div id="ethLiveCard" style="background:#f8f9fa;border-radius:6px;padding:12px 14px;margin-bottom:16px;border-left:4px solid #ccc;">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <span style="font-weight:600;font-size:13px;color:#555;">Live Status</span>
+                            <span id="ethLiveBadge" class="status disconnected">Disconnected</span>
+                        </div>
+                        <div id="ethLiveDetails" style="display:none;margin-top:10px;">
+                            <div class="info-grid">
+                                <div class="info-item"><label>IP Address</label><div class="value" id="ethLiveIp">-</div></div>
+                                <div class="info-item"><label>Subnet Mask</label><div class="value" id="ethLiveSubnet">-</div></div>
+                                <div class="info-item"><label>Gateway</label><div class="value" id="ethLiveGw">-</div></div>
+                                <div class="info-item"><label>MAC Address</label><div class="value" id="ethLiveMac">-</div></div>
+                            </div>
+                        </div>
+                    </div>
                     <button class="btn btn-primary" onclick="saveEthernetConfig()">💾 Save Ethernet Config</button>
                 </div>
             </div>
@@ -621,6 +705,13 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div id="mqtt" class="tab-content">
                 <div class="card">
                     <h3>MQTT Broker Configuration</h3>
+                    <div class="form-group">
+                        <label>Enable MQTT</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="mqttEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
                     <div class="form-group">
                         <label>Broker Host</label>
                         <input type="text" id="mqttHost" placeholder="mqtt.example.com">
@@ -636,6 +727,28 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <div class="form-group">
                         <label>Password</label>
                         <input type="password" id="mqttPass" placeholder="Password (optional)">
+                    </div>
+                    <div class="form-group">
+                        <label>Transport</label>
+                        <select id="mqttTransport">
+                            <option value="auto">Auto (Ethernet preferred, fallback WiFi)</option>
+                            <option value="wifi">WiFi only</option>
+                            <option value="ethernet">Ethernet only</option>
+                        </select>
+                    </div>
+                    <div id="mqttLiveCard" style="background:#f8f9fa;border-radius:6px;padding:12px 14px;margin-bottom:16px;border-left:4px solid #ccc;">
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                            <span style="font-weight:600;font-size:13px;color:#555;">Live Status</span>
+                            <span id="mqttLiveBadge" class="status disconnected">Disconnected</span>
+                            <button class="btn btn-secondary" style="padding:4px 12px;font-size:12px;margin:0;" onclick="loadMqttStatus()">🔄 Refresh</button>
+                        </div>
+                        <div id="mqttLiveDetails" style="display:none;margin-top:10px;">
+                            <div class="info-grid">
+                                <div class="info-item"><label>Broker</label><div class="value" id="mqttLiveBroker">-</div></div>
+                                <div class="info-item"><label>Port</label><div class="value" id="mqttLivePort">-</div></div>
+                            </div>
+                        </div>
+                        <div id="mqttLiveReason" style="display:none;margin-top:8px;font-size:13px;color:#721c24;"></div>
                     </div>
                     <button class="btn btn-primary" onclick="saveMQTTConfig()">💾 Save MQTT Config</button>
                 </div>
@@ -768,8 +881,56 @@ const char index_html[] PROGMEM = R"rawliteral(
                 </div>
             </div>
 
+            <!-- IO Tab -->
+            <div id="io" class="tab-content">
+                <div class="card">
+                    <h3>IO Peripheral Configuration</h3>
+                    <div class="form-group">
+                        <label>Input Expander (PCF8574)</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="ioInputEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Output Expander (PCF8574)</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="ioOutputEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>USB Scanner (ESP32-S3)</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="ioUsbEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <p style="color: #888; font-size: 13px; margin-top: 10px;">&#9888;&#65039; Changes take effect after reboot.</p>
+                    <button class="btn btn-primary" onclick="saveIOConfig()">&#128190; Save IO Config</button>
+                </div>
+            </div>
+
             <!-- Files Tab -->
             <div id="files" class="tab-content">
+                <div class="card">
+                    <h3>Filesystem Settings</h3>
+                    <div class="form-group">
+                        <label>Enable Filesystem (FFat)</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="fsEnabled" onchange="document.getElementById('fileManagerSection').style.display = this.checked ? 'block' : 'none'">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 10px; flex-wrap: wrap;">
+                        <button class="btn btn-primary" onclick="saveFilesystemConfig()">&#128190; Save</button>
+                        <button class="btn btn-danger" onclick="formatFilesystem()">&#9888;&#65039; Format Filesystem</button>
+                    </div>
+                    <p style="color: #888; font-size: 13px; margin-top: 10px;">Enable/disable change takes effect after reboot. Format immediately erases all files!</p>
+                </div>
+
+                <div id="fileManagerSection" style="display:none;">
+
                 <div class="card">
                     <h3>File Manager</h3>
                     <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
@@ -812,6 +973,8 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <p style="color: #666;">Loading files...</p>
                     </div>
                 </div>
+
+                </div><!-- end fileManagerSection -->
             </div>
             
             <!-- File Editor Modal -->
@@ -926,11 +1089,61 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('ethStatus').textContent = data.network.eth_status || '-';
                 document.getElementById('ipAddress').textContent = data.network.ip || '-';
                 document.getElementById('macAddress').textContent = data.network.mac || '-';
+                _applyNetworkLiveStatus(data.network);
             }
             
             if (data.rtc) {
                 document.getElementById('rtcDateTime').textContent = data.rtc.datetime || '-';
                 document.getElementById('rtcType').textContent = data.rtc.type || '-';
+            }
+
+            if (data.mqtt) _applyMqttLiveStatus(data.mqtt);
+
+            if (data.reset) {
+                document.getElementById('resetReason').textContent = data.reset.reason || '-';
+                document.getElementById('totalBoots').textContent  = data.reset.total_boots || 0;
+                const tbody = document.getElementById('resetCountersBody');
+                if (tbody) {
+                    tbody.innerHTML = '';
+                    const labels = {poweron:'Power-on', sw:'Software', panic:'Panic', int_wdt:'Int WDT',
+                                    task_wdt:'Task WDT', wdt:'Other WDT', brownout:'Brownout',
+                                    ext:'External', deepsleep:'Deep Sleep', sdio:'SDIO', unknown:'Unknown'};
+                    const counters = data.reset.counters || {};
+                    Object.entries(labels).forEach(([k, v]) => {
+                        const c = counters[k] || 0;
+                        if (c > 0) {
+                            tbody.innerHTML += `<tr style="border-bottom:1px solid #eee;"><td style="padding:5px 10px;">${v}</td><td style="padding:5px 10px;text-align:right;">${c}</td></tr>`;
+                        }
+                    });
+                    if (tbody.innerHTML === '') {
+                        tbody.innerHTML = '<tr><td colspan="2" style="padding:8px 10px;color:#888;">No data</td></tr>';
+                    }
+                }
+            }
+
+            if (data.partitions) {
+                const tbody = document.getElementById('partitionTableBody');
+                if (tbody) {
+                    tbody.innerHTML = '';
+                    data.partitions.forEach(p => {
+                        const addr  = '0x' + (p.address >>> 0).toString(16).padStart(6, '0').toUpperCase();
+                        const kb    = (p.size / 1024).toFixed(0);
+                        const mb    = (p.size / 1048576);
+                        const sz    = p.size >= 1048576
+                            ? `${mb % 1 === 0 ? mb.toFixed(0) : mb.toFixed(2)} MB (${kb} KB)`
+                            : `${kb} KB`;
+                        tbody.innerHTML += `<tr style="border-bottom:1px solid #eee;">
+                            <td style="padding:4px 8px;">${p.label}</td>
+                            <td style="padding:4px 8px;">${p.type}</td>
+                            <td style="padding:4px 8px;">${p.subtype}</td>
+                            <td style="padding:4px 8px;text-align:right;">${addr}</td>
+                            <td style="padding:4px 8px;text-align:right;">${sz}</td></tr>`;
+                    });
+                }
+                const flashEl = document.getElementById('flashInfo');
+                if (flashEl && data.flash_size) {
+                    flashEl.textContent = `Flash: ${(data.flash_size/1024/1024).toFixed(0)} MB  |  Speed: ${data.flash_speed} MHz`;
+                }
             }
         }
         
@@ -959,6 +1172,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                 });
             }
             document.getElementById(tabName).classList.add('active');
+            
+            // Auto-refresh when specific tabs open
+            if (tabName === 'files')   { refreshFileList(); }
+            if (tabName === 'network') { loadNetworkStatus(); }
+            if (tabName === 'mqtt')    { loadMqttStatus(); }
         }
         
         function showAlert(message, type = 'success') {
@@ -974,8 +1192,21 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         function toggleStaticIP() {
             const dhcp = document.getElementById('ethDhcp').checked;
-            const staticFields = document.getElementById('staticIpFields');
-            staticFields.style.display = dhcp ? 'none' : 'block';
+            document.getElementById('staticIpFields').style.display = dhcp ? 'none' : 'block';
+        }
+
+        function toggleWiFiStaticIP() {
+            const dhcp = document.getElementById('wifiDhcp').checked;
+            document.getElementById('wifiStaticIpFields').style.display = dhcp ? 'none' : 'block';
+        }
+
+        function isValidIP(ip) {
+            const parts = ip.split('.');
+            if (parts.length !== 4) return false;
+            return parts.every(p => {
+                const n = parseInt(p, 10);
+                return p !== '' && !isNaN(n) && n >= 0 && n <= 255 && String(n) === p;
+            });
         }
         
         // API Calls
@@ -991,10 +1222,17 @@ const char index_html[] PROGMEM = R"rawliteral(
                 }
                 
                 const response = await fetch(endpoint, options);
-                const result = await response.json();
+                const text = await response.text();
+                let result;
+                try {
+                    result = JSON.parse(text);
+                } catch (e) {
+                    showAlert('Server error (HTTP ' + response.status + ')', 'error');
+                    return { success: false };
+                }
                 
                 if (result.success) {
-                    showAlert(result.message || 'Operation successful', 'success');
+                    if (result.message) showAlert(result.message, 'success');
                 } else {
                     showAlert(result.message || 'Operation failed', 'error');
                 }
@@ -1027,10 +1265,32 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         
         function saveWiFiConfig() {
+            const dhcp = document.getElementById('wifiDhcp').checked;
+            if (!dhcp) {
+                const fields = [
+                    { id: 'wifiIp', label: 'IP Address' },
+                    { id: 'wifiGateway', label: 'Gateway' },
+                    { id: 'wifiSubnet', label: 'Subnet Mask' },
+                    { id: 'wifiDns', label: 'DNS Server' }
+                ];
+                for (const f of fields) {
+                    const val = document.getElementById(f.id).value.trim();
+                    if (!isValidIP(val)) {
+                        showAlert('Invalid ' + f.label + ': "' + val + '" - use format 192.168.1.1', 'error');
+                        document.getElementById(f.id).focus();
+                        return;
+                    }
+                }
+            }
             const data = {
                 enabled: document.getElementById('wifiEnabled').checked,
                 ssid: document.getElementById('wifiSsid').value,
-                password: document.getElementById('wifiPassword').value
+                password: document.getElementById('wifiPassword').value,
+                dhcp: dhcp,
+                ip:      dhcp ? '' : document.getElementById('wifiIp').value.trim(),
+                gateway: dhcp ? '' : document.getElementById('wifiGateway').value.trim(),
+                subnet:  dhcp ? '' : document.getElementById('wifiSubnet').value.trim(),
+                dns:     dhcp ? '' : document.getElementById('wifiDns').value.trim()
             };
             apiCall('/api/wifi/config', 'POST', data);
         }
@@ -1049,10 +1309,12 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         function saveMQTTConfig() {
             const data = {
+                enabled: document.getElementById('mqttEnabled').checked,
                 server: document.getElementById('mqttHost').value,
                 port: parseInt(document.getElementById('mqttPort').value),
                 username: document.getElementById('mqttUser').value,
-                password: document.getElementById('mqttPass').value
+                password: document.getElementById('mqttPass').value,
+                transport: document.getElementById('mqttTransport').value
             };
             apiCall('/api/mqtt/config', 'POST', data);
         }
@@ -1108,6 +1370,76 @@ const char index_html[] PROGMEM = R"rawliteral(
         function scanWiFi() {
             showAlert('Scanning WiFi networks...', 'success');
             apiCall('/api/wifi/scan', 'POST');
+        }
+
+        function loadNetworkStatus() {
+            apiCall('/api/status').then(data => {
+                if (data && data.network) _applyNetworkLiveStatus(data.network);
+            });
+        }
+
+        function loadMqttStatus() {
+            apiCall('/api/status').then(data => {
+                if (data && data.mqtt) _applyMqttLiveStatus(data.mqtt);
+            });
+        }
+
+        function _applyMqttLiveStatus(mqtt) {
+            var badge   = document.getElementById('mqttLiveBadge');
+            var details = document.getElementById('mqttLiveDetails');
+            var card    = document.getElementById('mqttLiveCard');
+            var reason  = document.getElementById('mqttLiveReason');
+            if (!badge) return;
+            var conn = (mqtt.status === 'Connected');
+            badge.textContent = mqtt.status || 'Unknown';
+            badge.className   = 'status ' + (conn ? 'connected' : 'disconnected');
+            if (card)    card.style.borderLeftColor = conn ? '#28a745' : '#dc3545';
+            if (details) details.style.display      = conn ? 'block'  : 'none';
+            if (reason)  reason.style.display       = (!conn && mqtt.reason) ? 'block' : 'none';
+            if (conn && details) {
+                document.getElementById('mqttLiveBroker').textContent = mqtt.broker || '-';
+                document.getElementById('mqttLivePort').textContent   = mqtt.port   || '-';
+            }
+            if (!conn && reason && mqtt.reason) {
+                reason.textContent = 'Reason: ' + mqtt.reason;
+            }
+        }
+
+        function _applyNetworkLiveStatus(net) {
+            // --- WiFi ---
+            var wifiBadge   = document.getElementById('wifiLiveBadge');
+            var wifiDetails = document.getElementById('wifiLiveDetails');
+            var wifiCard    = document.getElementById('wifiLiveCard');
+            if (wifiBadge) {
+                var wConn = (net.wifi_status === 'Connected');
+                wifiBadge.textContent  = net.wifi_status || 'Unknown';
+                wifiBadge.className    = 'status ' + (wConn ? 'connected' : 'disconnected');
+                if (wifiCard)    wifiCard.style.borderLeftColor = wConn ? '#28a745' : '#dc3545';
+                if (wifiDetails) wifiDetails.style.display      = wConn ? 'block'  : 'none';
+                if (wConn && wifiDetails) {
+                    document.getElementById('wifiLiveIp').textContent     = net.wifi_ip      || '-';
+                    document.getElementById('wifiLiveSubnet').textContent  = net.wifi_subnet  || '-';
+                    document.getElementById('wifiLiveGw').textContent      = net.wifi_gateway || '-';
+                    document.getElementById('wifiLiveRssi').textContent    = (net.wifi_rssi != null) ? (net.wifi_rssi + ' dBm') : '-';
+                }
+            }
+            // --- Ethernet ---
+            var ethBadge   = document.getElementById('ethLiveBadge');
+            var ethDetails = document.getElementById('ethLiveDetails');
+            var ethCard    = document.getElementById('ethLiveCard');
+            if (ethBadge) {
+                var eConn = (net.eth_status === 'Connected');
+                ethBadge.textContent  = net.eth_status || 'Unknown';
+                ethBadge.className    = 'status ' + (eConn ? 'connected' : 'disconnected');
+                if (ethCard)    ethCard.style.borderLeftColor = eConn ? '#28a745' : '#dc3545';
+                if (ethDetails) ethDetails.style.display      = eConn ? 'block'  : 'none';
+                if (eConn && ethDetails) {
+                    document.getElementById('ethLiveIp').textContent      = net.eth_ip      || '-';
+                    document.getElementById('ethLiveSubnet').textContent   = net.eth_subnet  || '-';
+                    document.getElementById('ethLiveGw').textContent       = net.eth_gateway || '-';
+                    document.getElementById('ethLiveMac').textContent      = net.mac         || '-';
+                }
+            }
         }
         
         async function uploadFirmware() {
@@ -1187,7 +1519,26 @@ const char index_html[] PROGMEM = R"rawliteral(
             };
             apiCall('/api/web/settings', 'POST', data);
         }
-        
+
+        function saveFilesystemConfig() {
+            const data = { fs_enabled: document.getElementById('fsEnabled').checked };
+            apiCall('/api/filesystem/config', 'POST', data);
+        }
+
+        async function formatFilesystem() {
+            if (!confirm('WARNING: This will permanently erase ALL files on the filesystem!\nThis cannot be undone. Continue?')) return;
+            apiCall('/api/filesystem/format', 'POST');
+        }
+
+        function saveIOConfig() {
+            const data = {
+                input_enabled:  document.getElementById('ioInputEnabled').checked,
+                output_enabled: document.getElementById('ioOutputEnabled').checked,
+                usb_enabled:    document.getElementById('ioUsbEnabled').checked
+            };
+            apiCall('/api/io/config', 'POST', data);
+        }
+
         // File Management Functions
         let currentPath = '/';
         
@@ -1269,11 +1620,6 @@ const char index_html[] PROGMEM = R"rawliteral(
             const fileList = document.getElementById('fileList');
             if (!fileList) return; // Safety check
             
-            if (!files || files.length === 0) {
-                fileList.innerHTML = '<p style="color: #666; padding: 20px; text-align: center;">No files found</p>';
-                return;
-            }
-            
             let html = '';
             
             if (currentPath !== '/') {
@@ -1291,26 +1637,30 @@ const char index_html[] PROGMEM = R"rawliteral(
                 `;
             }
             
-            files.forEach(file => {
-                const icon = file.isDir ? '📁' : getFileIcon(file.name);
-                const clickHandler = file.isDir ? `onclick="navigateToFolder('${file.name}')" style="cursor: pointer;"` : '';
-                html += `
-                    <div class="file-item">
-                        <div class="file-info" ${clickHandler}>
-                            <span class="file-icon">${icon}</span>
-                            <div>
-                                <div class="file-name">${file.name}</div>
-                                <div class="file-size">${file.isDir ? 'Directory' : formatBytes(file.size)}</div>
+            if (!files || files.length === 0) {
+                html += '<p style="color: #666; padding: 20px; text-align: center;">No files found</p>';
+            } else {
+                files.forEach(file => {
+                    const icon = file.isDir ? '📁' : getFileIcon(file.name);
+                    const clickHandler = file.isDir ? `onclick="navigateToFolder('${file.name}')" style="cursor: pointer;"` : '';
+                    html += `
+                        <div class="file-item">
+                            <div class="file-info" ${clickHandler}>
+                                <span class="file-icon">${icon}</span>
+                                <div>
+                                    <div class="file-name">${file.name}</div>
+                                    <div class="file-size">${file.isDir ? 'Directory' : formatBytes(file.size)}</div>
+                                </div>
+                            </div>
+                            <div class="file-actions">
+                                ${!file.isDir ? `<button class="btn-small" style="background: #17a2b8; color: white;" onclick="editFile('${file.name}')">✏️ Edit</button>` : ''}
+                                ${!file.isDir ? `<button class="btn-small btn-download" onclick="downloadFile('${file.name}')">⬇️ Download</button>` : ''}
+                                <button class="btn-small btn-delete" onclick="deleteFile('${file.name}')">🗑️ Delete</button>
                             </div>
                         </div>
-                        <div class="file-actions">
-                            ${!file.isDir ? `<button class="btn-small" style="background: #17a2b8; color: white;" onclick="editFile('${file.name}')">✏️ Edit</button>` : ''}
-                            ${!file.isDir ? `<button class="btn-small btn-download" onclick="downloadFile('${file.name}')">⬇️ Download</button>` : ''}
-                            <button class="btn-small btn-delete" onclick="deleteFile('${file.name}')">🗑️ Delete</button>
-                        </div>
-                    </div>
-                `;
-            });
+                    `;
+                });
+            }
             
             fileList.innerHTML = html;
         }
@@ -1498,6 +1848,12 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (wifiConfig.success) {
                 document.getElementById('wifiEnabled').checked = wifiConfig.enabled;
                 document.getElementById('wifiSsid').value = wifiConfig.ssid || '';
+                document.getElementById('wifiDhcp').checked = wifiConfig.dhcp !== false;
+                document.getElementById('wifiIp').value = wifiConfig.ip || '';
+                document.getElementById('wifiGateway').value = wifiConfig.gateway || '';
+                document.getElementById('wifiSubnet').value = wifiConfig.subnet || '';
+                document.getElementById('wifiDns').value = wifiConfig.dns || '';
+                toggleWiFiStaticIP();
             }
             
             // Load Ethernet config
@@ -1515,9 +1871,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             // Load MQTT config
             const mqttConfig = await apiCall('/api/mqtt/config');
             if (mqttConfig.success) {
+                document.getElementById('mqttEnabled').checked = mqttConfig.enabled || false;
                 document.getElementById('mqttHost').value = mqttConfig.server || '';
                 document.getElementById('mqttPort').value = mqttConfig.port || 1883;
                 document.getElementById('mqttUser').value = mqttConfig.username || '';
+                document.getElementById('mqttTransport').value = mqttConfig.transport || 'auto';
             }
             
             // Load Subtopic config
@@ -1545,6 +1903,21 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('rs485Databits').value = rs485Config.databits || 8;
                 document.getElementById('rs485Parity').value = rs485Config.parity || 'N';
                 document.getElementById('rs485Stopbits').value = rs485Config.stopbits || 1;
+            }
+
+            // Load IO config
+            const ioConfig = await apiCall('/api/io/config');
+            if (ioConfig.success) {
+                document.getElementById('ioInputEnabled').checked  = ioConfig.input_enabled;
+                document.getElementById('ioOutputEnabled').checked = ioConfig.output_enabled;
+                document.getElementById('ioUsbEnabled').checked    = ioConfig.usb_enabled;
+            }
+
+            // Load Filesystem config
+            const fsConfig = await apiCall('/api/filesystem/config');
+            if (fsConfig.success) {
+                document.getElementById('fsEnabled').checked = fsConfig.fs_enabled;
+                document.getElementById('fileManagerSection').style.display = fsConfig.fs_enabled ? 'block' : 'none';
             }
         }
         
@@ -1579,10 +1952,89 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 // ==================== API HANDLERS ====================
 
+// Body handler: buffers raw POST body into request->_tempObject.
+// Must be registered as the 5th parameter of webServer.on() for each route
+// that accepts application/json POST bodies.
+void handleJsonBody(AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    if (index == 0) {
+        if (request->_tempObject) free(request->_tempObject);
+        request->_tempObject = malloc(total + 1);
+    }
+    if (request->_tempObject) {
+        memcpy((uint8_t*)request->_tempObject + index, data, len);
+        if (index + len == total)
+            ((char*)request->_tempObject)[total] = '\0';
+    }
+}
+
+// Returns the buffered POST body (populated by handleJsonBody above).
+inline String getRequestBody(AsyncWebServerRequest *request) {
+    if (request->_tempObject != nullptr) {
+        return String((char*)request->_tempObject);
+    }
+    return request->arg("plain");
+}
+
+// Appends reset counters and partition table to any JSON doc (reused by WiFi & Ethernet status handlers)
+void addResetPartitionInfo(DynamicJsonDocument &doc) {
+    JsonObject resetObj = doc.createNestedObject("reset");
+    resetObj["reason"] = lastResetReason;
+    {
+        Preferences rp;
+        rp.begin("reset_cnt", true);
+        resetObj["total_boots"] = rp.getUInt("total", 0);
+        JsonObject cnt = resetObj.createNestedObject("counters");
+        cnt["poweron"]   = rp.getUInt("poweron",   0);
+        cnt["sw"]        = rp.getUInt("sw",        0);
+        cnt["panic"]     = rp.getUInt("panic",     0);
+        cnt["int_wdt"]   = rp.getUInt("int_wdt",   0);
+        cnt["task_wdt"]  = rp.getUInt("task_wdt",  0);
+        cnt["wdt"]       = rp.getUInt("wdt",       0);
+        cnt["brownout"]  = rp.getUInt("brownout",  0);
+        cnt["ext"]       = rp.getUInt("ext",       0);
+        cnt["deepsleep"] = rp.getUInt("deepsleep", 0);
+        cnt["sdio"]      = rp.getUInt("sdio",      0);
+        cnt["unknown"]   = rp.getUInt("unknown",   0);
+        rp.end();
+    }
+    JsonArray parts = doc.createNestedArray("partitions");
+    esp_partition_iterator_t it = esp_partition_find(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+    while (it != NULL) {
+        const esp_partition_t *p = esp_partition_get(it);
+        JsonObject po = parts.createNestedObject();
+        po["label"] = p->label;
+        if      (p->type == ESP_PARTITION_TYPE_APP)  po["type"] = "app";
+        else if (p->type == ESP_PARTITION_TYPE_DATA) po["type"] = "data";
+        else                                         po["type"] = "other";
+        char sub[12];
+        if (p->type == ESP_PARTITION_TYPE_APP) {
+            if      (p->subtype == ESP_PARTITION_SUBTYPE_APP_FACTORY) snprintf(sub, sizeof(sub), "factory");
+            else if (p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0)   snprintf(sub, sizeof(sub), "ota_0");
+            else if (p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1)   snprintf(sub, sizeof(sub), "ota_1");
+            else                                                       snprintf(sub, sizeof(sub), "0x%02x", p->subtype);
+        } else if (p->type == ESP_PARTITION_TYPE_DATA) {
+            if      (p->subtype == ESP_PARTITION_SUBTYPE_DATA_NVS)    snprintf(sub, sizeof(sub), "nvs");
+            else if (p->subtype == ESP_PARTITION_SUBTYPE_DATA_OTA)    snprintf(sub, sizeof(sub), "ota");
+            else if (p->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT)    snprintf(sub, sizeof(sub), "fat");
+            else if (p->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS) snprintf(sub, sizeof(sub), "spiffs");
+            else                                                       snprintf(sub, sizeof(sub), "0x%02x", p->subtype);
+        } else {
+            snprintf(sub, sizeof(sub), "0x%02x", p->subtype);
+        }
+        po["subtype"] = sub;
+        po["address"] = p->address;
+        po["size"]    = p->size;
+        it = esp_partition_next(it);
+    }
+    esp_partition_iterator_release(it);
+    doc["flash_size"]  = ESP.getFlashChipSize();
+    doc["flash_speed"] = ESP.getFlashChipSpeed() / 1000000;
+}
+
 void handleGetStatus(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    DynamicJsonDocument doc(2048);
+    DynamicJsonDocument doc(4096);
     doc["success"] = true;
     
     // System info
@@ -1598,23 +2050,28 @@ void handleGetStatus(AsyncWebServerRequest *request) {
     JsonObject network = doc.createNestedObject("network");
     
     if (WiFi.status() == WL_CONNECTED) {
-        network["wifi_status"] = "Connected";
-        network["wifi_ssid"] = WiFi.SSID();
-        network["wifi_ip"] = WiFi.localIP().toString();
-        network["wifi_rssi"] = WiFi.RSSI();
+        network["wifi_status"]  = "Connected";
+        network["wifi_ssid"]    = WiFi.SSID();
+        network["wifi_ip"]      = WiFi.localIP().toString();
+        network["wifi_subnet"]  = WiFi.subnetMask().toString();
+        network["wifi_gateway"] = WiFi.gatewayIP().toString();
+        network["wifi_rssi"]    = WiFi.RSSI();
     } else {
         network["wifi_status"] = "Disconnected";
     }
     
     if (Ethernet.linkStatus() == LinkON) {
-        network["eth_status"] = "Connected";
-        network["ip"] = Ethernet.localIP().toString();
-        network["gateway"] = Ethernet.gatewayIP().toString();
-        network["mac"] = getEthernetMACString();
+        network["eth_status"]  = "Connected";
+        network["eth_ip"]      = Ethernet.localIP().toString();
+        network["eth_subnet"]  = Ethernet.subnetMask().toString();
+        network["eth_gateway"] = Ethernet.gatewayIP().toString();
+        network["ip"]          = Ethernet.localIP().toString();
+        network["gateway"]     = Ethernet.gatewayIP().toString();
+        network["mac"]         = getEthernetMACString();
     } else {
         network["eth_status"] = "Disconnected";
         if (WiFi.status() == WL_CONNECTED) {
-            network["ip"] = WiFi.localIP().toString();
+            network["ip"]  = WiFi.localIP().toString();
             network["mac"] = WiFi.macAddress();
         }
     }
@@ -1623,7 +2080,34 @@ void handleGetStatus(AsyncWebServerRequest *request) {
     JsonObject rtcObj = doc.createNestedObject("rtc");
     rtcObj["datetime"] = rtc.getDateTime();
     rtcObj["type"] = rtc.isExternalRTCAvailable() ? "External (DS3231)" : "Internal";
-    
+
+    // MQTT status
+    JsonObject mqttSt = doc.createNestedObject("mqtt");
+    if (mqtt_obj.connected()) {
+        mqttSt["status"] = "Connected";
+        mqttSt["broker"] = mqttPref.getString("server", "");
+        mqttSt["port"]   = mqttPref.getInt("port", 1883);
+    } else {
+        mqttSt["status"] = "Disconnected";
+        const int mst = mqtt_obj.state();
+        const char* mReason;
+        switch (mst) {
+            case -4: mReason = "Connection Timeout";  break;
+            case -3: mReason = "Connection Lost";     break;
+            case -2: mReason = "Connect Failed";      break;
+            case -1: mReason = "Disconnected";        break;
+            case  1: mReason = "Bad Protocol";        break;
+            case  2: mReason = "Bad Client ID";       break;
+            case  3: mReason = "Server Unavailable";  break;
+            case  4: mReason = "Bad Credentials";     break;
+            case  5: mReason = "Unauthorized";        break;
+            default: mReason = "Unknown";             break;
+        }
+        mqttSt["reason"] = mReason;
+    }
+
+    addResetPartitionInfo(doc);
+
     String response;
     serializeJson(doc, response);
     request->send(200, "application/json", response);
@@ -1638,15 +2122,20 @@ void handleWiFiConfig(AsyncWebServerRequest *request) {
         DynamicJsonDocument doc(512);
         doc["success"] = true;
         doc["enabled"] = wifiPref.getBool("enabled", false);
-        doc["ssid"] = wifiPref.getString("ssid", "");
+        doc["ssid"]    = wifiPref.getString("ssid", "");
+        doc["dhcp"]    = wifiPref.getBool("dhcp", true);
+        doc["ip"]      = wifiPref.getString("ip", "");
+        doc["gateway"] = wifiPref.getString("gateway", "");
+        doc["subnet"]  = wifiPref.getString("subnet", "");
+        doc["dns"]     = wifiPref.getString("dns", "");
         
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
+    else if (strcmp(request->methodToString(), "POST") == 0) {
         // Set WiFi config
-        String body = request->arg("plain");
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(512);
         
         DeserializationError error = deserializeJson(doc, body);
@@ -1658,15 +2147,14 @@ void handleWiFiConfig(AsyncWebServerRequest *request) {
         wifiPref.end();
         wifiPref.begin("wifi", false);
         
-        if (doc.containsKey("enabled")) {
-            wifiPref.putBool("enabled", doc["enabled"]);
-        }
-        if (doc.containsKey("ssid")) {
-            wifiPref.putString("ssid", doc["ssid"].as<String>());
-        }
-        if (doc.containsKey("password")) {
-            wifiPref.putString("password", doc["password"].as<String>());
-        }
+        if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",   doc["enabled"]);
+        if (doc.containsKey("ssid"))     wifiPref.putString("ssid",    doc["ssid"].as<String>());
+        if (doc.containsKey("password")) wifiPref.putString("password", doc["password"].as<String>());
+        if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",      doc["dhcp"]);
+        if (doc.containsKey("ip"))       wifiPref.putString("ip",       doc["ip"].as<String>());
+        if (doc.containsKey("gateway"))  wifiPref.putString("gateway",  doc["gateway"].as<String>());
+        if (doc.containsKey("subnet"))   wifiPref.putString("subnet",   doc["subnet"].as<String>());
+        if (doc.containsKey("dns"))      wifiPref.putString("dns",      doc["dns"].as<String>());
         
         wifiPref.end();
         wifiPref.begin("wifi", true);
@@ -1680,23 +2168,24 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     if (request->method() == HTTP_GET) {
-        ethernetPref.begin("ethernet", true);
+        // Do NOT call begin()/end() here — ethernetPref is kept open by the application
+        // (same pattern as handleWiFiConfig). Calling begin() on an already-open instance
+        // fails silently and causes all reads to return their default values.
         DynamicJsonDocument doc(512);
         doc["success"] = true;
-        doc["enabled"] = ethernetPref.getBool("enabled", true);
-        doc["dhcp"] = ethernetPref.getBool("dhcp", true);
-        doc["ip"] = ethernetPref.getString("ip", "");
+        doc["enabled"] = ethernetPref.getBool("enabled", false);
+        doc["dhcp"]    = ethernetPref.getBool("dhcp",    true);
+        doc["ip"]      = ethernetPref.getString("ip",      "");
         doc["gateway"] = ethernetPref.getString("gateway", "");
-        doc["subnet"] = ethernetPref.getString("subnet", "");
-        doc["dns"] = ethernetPref.getString("dns", "");
-        ethernetPref.end();
+        doc["subnet"]  = ethernetPref.getString("subnet",  "");
+        doc["dns"]     = ethernetPref.getString("dns",     "");
         
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
-        String body = request->arg("plain");
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(512);
         
         DeserializationError error = deserializeJson(doc, body);
@@ -1705,16 +2194,20 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
             return;
         }
         
+        // Close read-only handle, open read-write, write, close, reopen read-only
+        // (same pattern as handleWiFiConfig POST)
+        ethernetPref.end();
         ethernetPref.begin("ethernet", false);
         
-        if (doc.containsKey("enabled")) ethernetPref.putBool("enabled", doc["enabled"]);
-        if (doc.containsKey("dhcp")) ethernetPref.putBool("dhcp", doc["dhcp"]);
-        if (doc.containsKey("ip")) ethernetPref.putString("ip", doc["ip"].as<String>());
+        if (doc.containsKey("enabled")) ethernetPref.putBool("enabled",   doc["enabled"]);
+        if (doc.containsKey("dhcp"))    ethernetPref.putBool("dhcp",      doc["dhcp"]);
+        if (doc.containsKey("ip"))      ethernetPref.putString("ip",      doc["ip"].as<String>());
         if (doc.containsKey("gateway")) ethernetPref.putString("gateway", doc["gateway"].as<String>());
-        if (doc.containsKey("subnet")) ethernetPref.putString("subnet", doc["subnet"].as<String>());
-        if (doc.containsKey("dns")) ethernetPref.putString("dns", doc["dns"].as<String>());
+        if (doc.containsKey("subnet"))  ethernetPref.putString("subnet",  doc["subnet"].as<String>());
+        if (doc.containsKey("dns"))     ethernetPref.putString("dns",     doc["dns"].as<String>());
         
         ethernetPref.end();
+        ethernetPref.begin("ethernet", true);   // reopen read-only for subsequent reads
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"Ethernet config saved. Reconnect to apply.\"}");
     }
@@ -1723,14 +2216,12 @@ void handleEthernetConfig(AsyncWebServerRequest *request) {
 
 void handleMQTTConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
-    
+
     if (request->method() == HTTP_GET) {
-        // Reopen mqttPref in case it was closed
-    
         mqttPref.begin("mqtt", true);
-        
         DynamicJsonDocument doc(512);
         doc["success"] = true;
+        doc["enabled"] = mqttPref.getBool("enabled", false);
         doc["server"] = mqttPref.getString("server", "");
         doc["port"] = mqttPref.getUShort("port", 1883);
         doc["username"] = mqttPref.getString("username", "");
@@ -1740,26 +2231,22 @@ void handleMQTTConfig(AsyncWebServerRequest *request) {
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
-        String body = request->arg("plain");
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(512);
-        
         DeserializationError error = deserializeJson(doc, body);
         if (error) {
             request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
             return;
         }
-        
         mqttPref.begin("mqtt", false);
-        
+        if (doc.containsKey("enabled")) mqttPref.putBool("enabled", doc["enabled"].as<bool>());
         if (doc.containsKey("server")) mqttPref.putString("server", doc["server"].as<String>());
         if (doc.containsKey("port")) mqttPref.putUShort("port", doc["port"].as<uint16_t>());
         if (doc.containsKey("username")) mqttPref.putString("username", doc["username"].as<String>());
         if (doc.containsKey("password")) mqttPref.putString("password", doc["password"].as<String>());
         if (doc.containsKey("transport")) mqttPref.putString("transport", doc["transport"].as<String>());
-        
         mqttPref.end();
-        
         request->send(200, "application/json", "{\"success\":true,\"message\":\"MQTT config saved\"}");
     }
 }
@@ -1769,7 +2256,7 @@ void handleSubtopicConfig(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
     Preferences subPref;
-    subPref.begin("subtopics", request->method() == HTTP_POST ? false : true);
+    subPref.begin("subtopics", strcmp(request->methodToString(), "POST") == 0 ? false : true);
     
     if (request->method() == HTTP_GET) {
         DynamicJsonDocument doc(512);
@@ -1785,8 +2272,8 @@ void handleSubtopicConfig(AsyncWebServerRequest *request) {
         subPref.end();
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
-        String body = request->arg("plain");
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(512);
         
         DeserializationError error = deserializeJson(doc, body);
@@ -1821,8 +2308,8 @@ void handleHMIConfig(AsyncWebServerRequest *request) {
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
-        String body = request->arg("plain");
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(256);
         
         DeserializationError error = deserializeJson(doc, body);
@@ -1869,8 +2356,8 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
         serializeJson(doc, response);
         request->send(200, "application/json", response);
     }
-    else if (request->method() == HTTP_POST) {
-        String body = request->arg("plain");
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
         DynamicJsonDocument doc(512);
         
         DeserializationError error = deserializeJson(doc, body);
@@ -1911,7 +2398,7 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
 void handleRTCSet(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    String body = request->arg("plain");
+    String body = getRequestBody(request);
     DynamicJsonDocument doc(256);
     
     DeserializationError error = deserializeJson(doc, body);
@@ -2041,7 +2528,7 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 
 
 String getSystemStatusJSON() {
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(4096);
     doc["type"] = "status";
     
     JsonObject system = doc.createNestedObject("system");
@@ -2064,7 +2551,34 @@ String getSystemStatusJSON() {
     JsonObject rtcObj = doc.createNestedObject("rtc");
     rtcObj["datetime"] = rtc.getDateTime();
     rtcObj["type"] = rtc.isExternalRTCAvailable() ? "External" : "Internal";
-    
+
+    // MQTT status
+    JsonObject mqttSt = doc.createNestedObject("mqtt");
+    if (mqtt_obj.connected()) {
+        mqttSt["status"] = "Connected";
+        mqttSt["broker"] = mqttPref.getString("server", "");
+        mqttSt["port"]   = mqttPref.getInt("port", 1883);
+    } else {
+        mqttSt["status"] = "Disconnected";
+        const int mst = mqtt_obj.state();
+        const char* mReason;
+        switch (mst) {
+            case -4: mReason = "Connection Timeout";  break;
+            case -3: mReason = "Connection Lost";     break;
+            case -2: mReason = "Connect Failed";      break;
+            case -1: mReason = "Disconnected";        break;
+            case  1: mReason = "Bad Protocol";        break;
+            case  2: mReason = "Bad Client ID";       break;
+            case  3: mReason = "Server Unavailable";  break;
+            case  4: mReason = "Bad Credentials";     break;
+            case  5: mReason = "Unauthorized";        break;
+            default: mReason = "Unknown";             break;
+        }
+        mqttSt["reason"] = mReason;
+    }
+
+    addResetPartitionInfo(doc);
+
     String output;
     serializeJson(doc, output);
     return output;
@@ -2076,7 +2590,7 @@ String getSystemStatusJSON() {
 void handleFileList(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+    if (!fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         return;
     }
@@ -2114,7 +2628,11 @@ void handleFileList(AsyncWebServerRequest *request) {
     File file = root.openNextFile();
     while (file) {
         JsonObject fileObj = files.createNestedObject();
-        fileObj["name"] = String(file.name());
+        // file.name() may return full path on newer ESP32 cores — strip path prefix
+        String fname = String(file.name());
+        int lastSlash = fname.lastIndexOf('/');
+        if (lastSlash >= 0) fname = fname.substring(lastSlash + 1);
+        fileObj["name"] = fname;
         fileObj["size"] = file.size();
         fileObj["isDir"] = file.isDirectory();
         file = root.openNextFile();
@@ -2135,7 +2653,7 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
     if (!index) {
         fileUploadSuccess = false;
         
-        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+        if (!fsManagerFFat.isFilesystemMounted()) {
             Serial.println("[FS] Upload rejected: filesystem not mounted");
             return;
         }
@@ -2181,7 +2699,7 @@ void handleFileUpload(AsyncWebServerRequest *request, String filename, size_t in
 void handleFileDownload(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+    if (!fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "text/plain", "Filesystem not mounted");
         return;
     }
@@ -2230,7 +2748,7 @@ void handleFileDelete(AsyncWebServerRequest *request) {
     
     Serial.println("[FS] Authentication passed");
     
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+    if (!fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         return;
     }
@@ -2295,7 +2813,7 @@ void handleFileDelete(AsyncWebServerRequest *request) {
 void handleFileRead(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+    if (!fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         return;
     }
@@ -2349,7 +2867,7 @@ void handleFileWriteBody(AsyncWebServerRequest *request, uint8_t *data, size_t l
 void handleFileWrite(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+    if (!fsManagerFFat.isFilesystemMounted()) {
         request->send(500, "application/json", "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         _fileWriteBody = "";
         return;
@@ -2387,6 +2905,97 @@ void handleFileWrite(AsyncWebServerRequest *request) {
 }
 
 
+// ==================== IO & FILESYSTEM & WEB SETTINGS HANDLERS ====================
+
+void handleIOConfig(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+    if (request->method() == HTTP_GET) {
+        DynamicJsonDocument doc(256);
+        doc["success"] = true;
+        doc["input_enabled"]  = settingsPref.getBool("input_enabled",  false);
+        doc["output_enabled"] = settingsPref.getBool("output_enabled", false);
+        doc["usb_enabled"]    = settingsPref.getBool("usb_enabled",    false);
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+        settingsPref.end();
+        settingsPref.begin("settings", false);
+        if (doc.containsKey("input_enabled"))  settingsPref.putBool("input_enabled",  doc["input_enabled"]);
+        if (doc.containsKey("output_enabled")) settingsPref.putBool("output_enabled", doc["output_enabled"]);
+        if (doc.containsKey("usb_enabled"))    settingsPref.putBool("usb_enabled",    doc["usb_enabled"]);
+        settingsPref.end();
+        settingsPref.begin("settings", true);
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"IO config saved. Reboot to apply.\"}");
+    }
+}
+
+void handleFilesystemConfig(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+    if (request->method() == HTTP_GET) {
+        DynamicJsonDocument doc(256);
+        doc["success"] = true;
+        doc["fs_enabled"] = settingsPref.getBool("fs_enabled", false);
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+        settingsPref.end();
+        settingsPref.begin("settings", false);
+        if (doc.containsKey("fs_enabled")) settingsPref.putBool("fs_enabled", doc["fs_enabled"]);
+        settingsPref.end();
+        settingsPref.begin("settings", true);
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Filesystem config saved. Reboot to apply.\"}");
+    }
+}
+
+void handleFilesystemFormat(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+    bool ok = fsManagerFFat.format();
+    if (ok) {
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Filesystem formatted. Reboot to remount.\"}");
+    } else {
+        request->send(500, "application/json", "{\"success\":false,\"message\":\"Format failed\"}");
+    }
+}
+
+void handleWebSettings(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+    if (request->method() == HTTP_GET) {
+        DynamicJsonDocument doc(256);
+        doc["success"]      = true;
+        doc["username"]     = web_username;
+        doc["auth_enabled"] = web_auth_enabled;
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    } else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+        if (doc.containsKey("username")) web_username = doc["username"].as<String>();
+        if (doc.containsKey("password") && doc["password"].as<String>().length() > 0)
+            web_password = doc["password"].as<String>();
+        if (doc.containsKey("auth_enabled")) web_auth_enabled = doc["auth_enabled"];
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Web settings saved\"}");
+    }
+}
+
 // ==================== SETUP WEB SERVER ====================
 
 void setupWebServer() {
@@ -2405,13 +3014,13 @@ void setupWebServer() {
     
     // API Routes
     webServer.on("/api/status", HTTP_GET, handleGetStatus);
-    webServer.on("/api/wifi/config", HTTP_ANY, handleWiFiConfig);
-    webServer.on("/api/ethernet/config", HTTP_ANY, handleEthernetConfig);
-    webServer.on("/api/mqtt/config", HTTP_ANY, handleMQTTConfig);
-    webServer.on("/api/subtopic/config", HTTP_ANY, handleSubtopicConfig);
-    webServer.on("/api/hmi/config", HTTP_ANY, handleHMIConfig);
-    webServer.on("/api/rs485modbus/config", HTTP_ANY, handleRS485ModbusConfig);
-    webServer.on("/api/rtc/set", HTTP_POST, handleRTCSet);
+    webServer.on("/api/wifi/config", HTTP_ANY, handleWiFiConfig, NULL, handleJsonBody);
+    webServer.on("/api/ethernet/config", HTTP_ANY, handleEthernetConfig, NULL, handleJsonBody);
+    webServer.on("/api/mqtt/config", HTTP_ANY, handleMQTTConfig, NULL, handleJsonBody);
+    webServer.on("/api/subtopic/config", HTTP_ANY, handleSubtopicConfig, NULL, handleJsonBody);
+    webServer.on("/api/hmi/config", HTTP_ANY, handleHMIConfig, NULL, handleJsonBody);
+    webServer.on("/api/rs485modbus/config", HTTP_ANY, handleRS485ModbusConfig, NULL, handleJsonBody);
+    webServer.on("/api/rtc/set", HTTP_POST, handleRTCSet, NULL, handleJsonBody);
     webServer.on("/api/system/reboot", HTTP_POST, handleSystemReboot);
     webServer.on("/api/system/factory", HTTP_POST, handleFactoryReset);
     
@@ -2421,6 +3030,10 @@ void setupWebServer() {
     webServer.on("/api/files/write", HTTP_POST, handleFileWrite, NULL, handleFileWriteBody);
     webServer.on("/api/files/download", HTTP_GET, handleFileDownload);
     webServer.on("/api/files/delete", HTTP_ANY, handleFileDelete);
+    webServer.on("/api/io/config", HTTP_ANY, handleIOConfig, NULL, handleJsonBody);
+    webServer.on("/api/filesystem/config", HTTP_ANY, handleFilesystemConfig, NULL, handleJsonBody);
+    webServer.on("/api/filesystem/format", HTTP_POST, handleFilesystemFormat);
+    webServer.on("/api/web/settings", HTTP_ANY, handleWebSettings, NULL, handleJsonBody);
     
     // Firmware update handler
     webServer.on("/api/firmware/update", HTTP_POST,
@@ -2451,7 +3064,7 @@ void setupWebServer() {
     // WebSocket
     ws.onEvent(onWebSocketEvent);
     webServer.addHandler(&ws);
-    
+
     // 404 handler
     webServer.onNotFound([](AsyncWebServerRequest *request) {
         request->send(404, "application/json", "{\"success\":false,\"message\":\"Not found\"}");
@@ -2714,7 +3327,7 @@ void handleEthWebClients() {
     
     // --- GET /api/status ---
     else if (path == "/api/status" && method == "GET") {
-        DynamicJsonDocument doc(2048);
+        DynamicJsonDocument doc(4096);
         doc["success"] = true;
         
         JsonObject system = doc.createNestedObject("system");
@@ -2750,7 +3363,9 @@ void handleEthWebClients() {
         JsonObject rtcObj = doc.createNestedObject("rtc");
         rtcObj["datetime"] = rtc.getDateTime();
         rtcObj["type"] = rtc.isExternalRTCAvailable() ? "External (DS3231)" : "Internal";
-        
+
+        addResetPartitionInfo(doc);
+
         String response;
         serializeJson(doc, response);
         ethSendJSON(client, 200, response);
@@ -2761,7 +3376,12 @@ void handleEthWebClients() {
         DynamicJsonDocument doc(512);
         doc["success"] = true;
         doc["enabled"] = wifiPref.getBool("enabled", false);
-        doc["ssid"] = wifiPref.getString("ssid", "");
+        doc["ssid"]    = wifiPref.getString("ssid", "");
+        doc["dhcp"]    = wifiPref.getBool("dhcp", true);
+        doc["ip"]      = wifiPref.getString("ip", "");
+        doc["gateway"] = wifiPref.getString("gateway", "");
+        doc["subnet"]  = wifiPref.getString("subnet", "");
+        doc["dns"]     = wifiPref.getString("dns", "");
         
         String response;
         serializeJson(doc, response);
@@ -2777,9 +3397,14 @@ void handleEthWebClients() {
         } else {
             wifiPref.end();
             wifiPref.begin("wifi", false);
-            if (doc.containsKey("enabled")) wifiPref.putBool("enabled", doc["enabled"]);
-            if (doc.containsKey("ssid")) wifiPref.putString("ssid", doc["ssid"].as<String>());
+            if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",   doc["enabled"]);
+            if (doc.containsKey("ssid"))     wifiPref.putString("ssid",    doc["ssid"].as<String>());
             if (doc.containsKey("password")) wifiPref.putString("password", doc["password"].as<String>());
+            if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",      doc["dhcp"]);
+            if (doc.containsKey("ip"))       wifiPref.putString("ip",       doc["ip"].as<String>());
+            if (doc.containsKey("gateway"))  wifiPref.putString("gateway",  doc["gateway"].as<String>());
+            if (doc.containsKey("subnet"))   wifiPref.putString("subnet",   doc["subnet"].as<String>());
+            if (doc.containsKey("dns"))      wifiPref.putString("dns",      doc["dns"].as<String>());
             wifiPref.end();
             wifiPref.begin("wifi", true);
             ethSendJSON(client, 200, "{\"success\":true,\"message\":\"WiFi config saved\"}");
@@ -3081,7 +3706,7 @@ void handleEthWebClients() {
     
     // --- GET /api/files/list ---
     else if (path == "/api/files/list" && method == "GET") {
-        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+        if (!fsManagerFFat.isFilesystemMounted()) {
             ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         } else {
             String filePath = urlDecode(getEthQueryParam(query, "path"));
@@ -3104,7 +3729,11 @@ void handleEthWebClients() {
                     File file = root.openNextFile();
                     while (file) {
                         JsonObject fileObj = files.createNestedObject();
-                        fileObj["name"] = String(file.name());
+                        // file.name() may return full path on newer ESP32 cores — strip path prefix
+                        String fname = String(file.name());
+                        int lastSlash = fname.lastIndexOf('/');
+                        if (lastSlash >= 0) fname = fname.substring(lastSlash + 1);
+                        fileObj["name"] = fname;
                         fileObj["size"] = file.size();
                         fileObj["isDir"] = file.isDirectory();
                         file = root.openNextFile();
@@ -3120,7 +3749,7 @@ void handleEthWebClients() {
     
     // --- GET /api/files/read ---
     else if (path == "/api/files/read" && method == "GET") {
-        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+        if (!fsManagerFFat.isFilesystemMounted()) {
             ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         } else {
             String filePath = urlDecode(getEthQueryParam(query, "path"));
@@ -3148,7 +3777,7 @@ void handleEthWebClients() {
     
     // --- POST /api/files/write ---
     else if (path == "/api/files/write" && method == "POST") {
-        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+        if (!fsManagerFFat.isFilesystemMounted()) {
             ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         } else {
             size_t docSize = max((size_t)1024, body.length() * 2 + 512);
@@ -3173,7 +3802,7 @@ void handleEthWebClients() {
     
     // --- POST /api/files/upload ---
     else if (path == "/api/files/upload" && method == "POST") {
-        if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted()) {
+        if (!fsManagerFFat.isFilesystemMounted()) {
             ethSendJSON(client, 500, "{\"success\":false,\"message\":\"Filesystem not mounted\"}");
         } else {
             // For large uploads, body may not have been read yet (contentLength >= 8192)
@@ -3250,7 +3879,7 @@ void handleEthWebClients() {
             client.print("Missing path parameter");
         } else {
             if (!filePath.startsWith("/")) filePath = "/" + filePath;
-            if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
+            if (!fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
                 ethSendHeader(client, 404, "text/plain", 14);
                 client.print("File not found");
             } else {
@@ -3307,7 +3936,7 @@ void handleEthWebClients() {
             ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Missing path parameter\"}");
         } else {
             if (!filePath.startsWith("/")) filePath = "/" + filePath;
-            if (!filesystemMounted || !fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
+            if (!fsManagerFFat.isFilesystemMounted() || !fsManagerFFat.search(filePath)) {
                 ethSendJSON(client, 404, "{\"success\":false,\"message\":\"File not found\"}");
             } else {
                 fs::FS *fs = fsManagerFFat.getActiveFilesystem();
@@ -3331,6 +3960,80 @@ void handleEthWebClients() {
         }
     }
     
+    // --- GET/POST /api/io/config ---
+    else if (path == "/api/io/config" && method == "GET") {
+        DynamicJsonDocument doc(256);
+        doc["success"] = true;
+        doc["input_enabled"]  = settingsPref.getBool("input_enabled",  false);
+        doc["output_enabled"] = settingsPref.getBool("output_enabled", false);
+        doc["usb_enabled"]    = settingsPref.getBool("usb_enabled",    false);
+        String resp; serializeJson(doc, resp);
+        ethSendJSON(client, 200, resp);
+    }
+    else if (path == "/api/io/config" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            if (doc.containsKey("input_enabled"))  settingsPref.putBool("input_enabled",  doc["input_enabled"]);
+            if (doc.containsKey("output_enabled")) settingsPref.putBool("output_enabled", doc["output_enabled"]);
+            if (doc.containsKey("usb_enabled"))    settingsPref.putBool("usb_enabled",    doc["usb_enabled"]);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"IO config saved. Reboot to apply.\"}");
+        }
+    }
+    // --- GET/POST /api/filesystem/config ---
+    else if (path == "/api/filesystem/config" && method == "GET") {
+        DynamicJsonDocument doc(256);
+        doc["success"]    = true;
+        doc["fs_enabled"] = settingsPref.getBool("fs_enabled", false);
+        String resp; serializeJson(doc, resp);
+        ethSendJSON(client, 200, resp);
+    }
+    else if (path == "/api/filesystem/config" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            if (doc.containsKey("fs_enabled")) settingsPref.putBool("fs_enabled", doc["fs_enabled"]);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Filesystem config saved. Reboot to apply.\"}");
+        }
+    }
+    // --- POST /api/filesystem/format ---
+    else if (path == "/api/filesystem/format" && method == "POST") {
+        bool ok = fsManagerFFat.format();
+        ethSendJSON(client, ok ? 200 : 500,
+            ok ? "{\"success\":true,\"message\":\"Filesystem formatted. Reboot to remount.\"}"
+               : "{\"success\":false,\"message\":\"Format failed\"}");
+    }
+    // --- GET/POST /api/web/settings ---
+    else if (path == "/api/web/settings" && method == "GET") {
+        DynamicJsonDocument doc(256);
+        doc["success"]      = true;
+        doc["username"]     = web_username;
+        doc["auth_enabled"] = web_auth_enabled;
+        String resp; serializeJson(doc, resp);
+        ethSendJSON(client, 200, resp);
+    }
+    else if (path == "/api/web/settings" && method == "POST") {
+        DynamicJsonDocument doc(256);
+        if (deserializeJson(doc, body)) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            if (doc.containsKey("username")) web_username = doc["username"].as<String>();
+            if (doc.containsKey("password") && doc["password"].as<String>().length() > 0)
+                web_password = doc["password"].as<String>();
+            if (doc.containsKey("auth_enabled")) web_auth_enabled = doc["auth_enabled"];
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Web settings saved\"}");
+        }
+    }
     // --- 404 Not Found ---
     else {
         ethSendJSON(client, 404, "{\"success\":false,\"message\":\"Not found\"}");

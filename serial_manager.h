@@ -1218,6 +1218,8 @@ void printSettingsHelp() {
     Serial.println("  settings input disable   - Disable PCF8574 input expander");
     Serial.println("  settings output enable   - Enable PCF8574 output expander");
     Serial.println("  settings output disable  - Disable PCF8574 output expander");
+    Serial.println("  settings usb enable      - Enable USB scanner (ESP32-S3 only)");
+    Serial.println("  settings usb disable     - Disable USB scanner");
     Serial.println("Note: Changes require device reboot to take effect");
 }
 
@@ -1243,24 +1245,27 @@ void handleSettingsCommand(String args) {
         printSettingsHelp();
     }
     else if (subCmd == "show" || subCmd == "status") {
-        settingsPref.begin("settings", true);
         Serial.println("=== Board Settings ===");
         Serial.printf("  Filesystem (fs):     %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
         Serial.printf("  Input Expander:      %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
         Serial.printf("  Output Expander:     %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
+        Serial.printf("  USB Scanner:         %s\n", settingsPref.getBool("usb_enabled", false) ? "Enabled" : "Disabled");
         Serial.println("======================");
-        settingsPref.end();
     }
     else if (subCmd == "fs" || subCmd == "filesystem") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("fs_enabled", true);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Filesystem enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("fs_enabled", false);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Filesystem disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Filesystem is: %s\n", settingsPref.getBool("fs_enabled", false) ? "Enabled" : "Disabled");
@@ -1269,14 +1274,18 @@ void handleSettingsCommand(String args) {
     }
     else if (subCmd == "input") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("input_enabled", true);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Input expander enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("input_enabled", false);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Input expander disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Input expander is: %s\n", settingsPref.getBool("input_enabled", false) ? "Enabled" : "Disabled");
@@ -1285,18 +1294,42 @@ void handleSettingsCommand(String args) {
     }
     else if (subCmd == "output") {
         if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("output_enabled", true);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Output expander enabled (reboot to apply)");
         } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
             settingsPref.begin("settings", false);
             settingsPref.putBool("output_enabled", false);
             settingsPref.end();
+            settingsPref.begin("settings", true);
             Serial.println("[Settings] Output expander disabled (reboot to apply)");
         } else {
             Serial.printf("[Settings] Output expander is: %s\n", settingsPref.getBool("output_enabled", false) ? "Enabled" : "Disabled");
             Serial.println("Usage: settings output enable|disable");
+        }
+    }
+    else if (subCmd == "usb") {
+        if (subArgs == "enable" || subArgs == "on" || subArgs == "1") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("usb_enabled", true);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] USB scanner enabled (reboot to apply)");
+        } else if (subArgs == "disable" || subArgs == "off" || subArgs == "0") {
+            settingsPref.end();
+            settingsPref.begin("settings", false);
+            settingsPref.putBool("usb_enabled", false);
+            settingsPref.end();
+            settingsPref.begin("settings", true);
+            Serial.println("[Settings] USB scanner disabled (reboot to apply)");
+        } else {
+            Serial.printf("[Settings] USB scanner is: %s\n", settingsPref.getBool("usb_enabled", false) ? "Enabled" : "Disabled");
+            Serial.println("Usage: settings usb enable|disable");
         }
     }
     else {

@@ -146,6 +146,7 @@ bool wifiEnabled = false;      // Cache WiFi enabled status
 bool tcpModbusEnabled = false; // Cache TCP Modbus enabled status
 bool filesystemReady = false;  // Track filesystem status
 bool rs485ModbusEnabled = false; // Cache RS485 Modbus enabled status
+bool usbScannerEnabled = false;  // Cache USB scanner enabled status
 
 
 // Cache MQTT subtopic components to avoid NVS reads in high-frequency loops
@@ -175,6 +176,7 @@ Preferences rs485ModbusPref;
 
 
 String mqttTransport = "auto"; // Cache MQTT transport type
+String lastResetReason = "Unknown"; // Last boot reset reason (set in boardinit)
 
 // subtopic, fsManagerFFat, mqtt_obj declared above (before firmware_update.h / mac_process.h)
 #define FILE_SYSTEM FFat
@@ -438,6 +440,19 @@ void boardinit(){
     Serial.setTimeout(300);
     Serial.println("IIOT Gateway Board");
     settingsPref.begin("settings", true); 
+
+    #if defined(ESP32)
+        #if CONFIG_IDF_TARGET_ESP32C6
+        #elif CONFIG_IDF_TARGET_ESP32S3
+            usbScannerEnabled = settingsPref.getBool("usb_enabled", false);
+            if (usbScannerEnabled) {
+                usb_scannerInit();
+                Serial.println("USB Scanner Init");
+            } else {
+                Serial.println("USB Scanner disabled in preferences.");
+            }
+        #endif
+    #endif
     
     // Configure watchdog timeout - increase to 10 seconds for network operations
     // #ifdef ESP32
@@ -460,18 +475,18 @@ void boardinit(){
     
     const char* reasonKey = "unknown";
     switch(reason) {
-        case ESP_RST_UNKNOWN:    Serial.println("Unknown");           reasonKey = "unknown";   break;
-        case ESP_RST_POWERON:    Serial.println("Power-on");          reasonKey = "poweron";   break;
-        case ESP_RST_EXT:        Serial.println("External pin");      reasonKey = "ext";       break;
-        case ESP_RST_SW:         Serial.println("Software reset");    reasonKey = "sw";        break;
-        case ESP_RST_PANIC:      Serial.println("Exception/panic");   reasonKey = "panic";     break;
-        case ESP_RST_INT_WDT:    Serial.println("Interrupt watchdog");reasonKey = "int_wdt";   break;
-        case ESP_RST_TASK_WDT:   Serial.println("Task watchdog");     reasonKey = "task_wdt";  break;
-        case ESP_RST_WDT:        Serial.println("Other watchdog");    reasonKey = "wdt";       break;
-        case ESP_RST_DEEPSLEEP:  Serial.println("Deep sleep reset");  reasonKey = "deepsleep"; break;
-        case ESP_RST_BROWNOUT:   Serial.println("Brownout");          reasonKey = "brownout";  break;
-        case ESP_RST_SDIO:       Serial.println("SDIO");              reasonKey = "sdio";      break;
-        default:                 Serial.println("Unknown");           reasonKey = "unknown";   break;
+        case ESP_RST_UNKNOWN:    Serial.println("Unknown");           reasonKey = "unknown";   lastResetReason = "Unknown";        break;
+        case ESP_RST_POWERON:    Serial.println("Power-on");          reasonKey = "poweron";   lastResetReason = "Power-on";       break;
+        case ESP_RST_EXT:        Serial.println("External pin");      reasonKey = "ext";       lastResetReason = "External pin";   break;
+        case ESP_RST_SW:         Serial.println("Software reset");    reasonKey = "sw";        lastResetReason = "Software reset"; break;
+        case ESP_RST_PANIC:      Serial.println("Exception/panic");   reasonKey = "panic";     lastResetReason = "Panic";          break;
+        case ESP_RST_INT_WDT:    Serial.println("Interrupt watchdog");reasonKey = "int_wdt";   lastResetReason = "Int WDT";        break;
+        case ESP_RST_TASK_WDT:   Serial.println("Task watchdog");     reasonKey = "task_wdt";  lastResetReason = "Task WDT";       break;
+        case ESP_RST_WDT:        Serial.println("Other watchdog");    reasonKey = "wdt";       lastResetReason = "Other WDT";      break;
+        case ESP_RST_DEEPSLEEP:  Serial.println("Deep sleep reset");  reasonKey = "deepsleep"; lastResetReason = "Deep Sleep";     break;
+        case ESP_RST_BROWNOUT:   Serial.println("Brownout");          reasonKey = "brownout";  lastResetReason = "Brownout";       break;
+        case ESP_RST_SDIO:       Serial.println("SDIO");              reasonKey = "sdio";      lastResetReason = "SDIO";           break;
+        default:                 Serial.println("Unknown");           reasonKey = "unknown";   lastResetReason = "Unknown";        break;
     }
 
     // Increment reset reason counter in Preferences (NVS)
