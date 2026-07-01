@@ -34,6 +34,8 @@ extern Preferences tcpModbusPref;
 extern Preferences settingsPref;
 extern Preferences rs485ModbusPref;
 extern bool rs485ModbusEnabled;
+extern Preferences serialportPref;
+extern bool serialportEnabled;
 
 std::function<void(String cmd, String args)> serial_processcallback = nullptr;
 
@@ -55,6 +57,7 @@ void printHelp() {
     Serial.println("  hmi [args]               - HMI display configuration commands");
     Serial.println("  tcpmodbus [args]            - TCP Modbus device management commands");
     Serial.println("  rs485modbus [args]          - RS485 Modbus RTU commands (baudrate, bits, parity, stopbits)");
+    Serial.println("  serialport [args]           - Serial Port (UART2) commands (enable, disable, baudrate, bits, parity, stopbits)");
     Serial.println("  rtc [args]               - RTC (Real-Time Clock) commands");
     Serial.println("");
     Serial.println("File System Commands:");
@@ -1427,6 +1430,160 @@ void handleSystemCommand(String cmd, String args) {
 }
 
 
+// ==================== SERIAL PORT (UART2) COMMAND HANDLER ====================
+void printSerialPortHelp() {
+    Serial.println("======= Serial Port Commands =========");
+    Serial.println("  serialport enable                   - Enable Serial Port (UART2)");
+    Serial.println("  serialport disable                  - Disable Serial Port (UART2)");
+    Serial.println("  serialport baudrate <rate>           - Set baud rate (e.g. 9600, 115200)");
+    Serial.println("  serialport databits <5|6|7|8>        - Set data bits");
+    Serial.println("  serialport parity <none|even|odd>    - Set parity");
+    Serial.println("  serialport stopbits <1|2>            - Set stop bits");
+    Serial.println("  serialport config                   - Show current configuration");
+    Serial.println("  serialport status                   - Show runtime status");
+    Serial.println("Note: Changes require device reboot to take effect");
+    Serial.println("Note: UART2 is shared with RS485 Modbus - enable only one at a time");
+    Serial.println("======================================");
+}
+
+void handleSerialPortCommand(String args) {
+    args.trim();
+    int spaceIndex = args.indexOf(' ');
+    String subCmd = (spaceIndex > 0) ? args.substring(0, spaceIndex) : args;
+    String subArgs = (spaceIndex > 0) ? args.substring(spaceIndex + 1) : "";
+    subCmd.toLowerCase();
+    subArgs.trim();
+
+    if (subCmd == "" || subCmd == "help" || subCmd == "?") {
+        printSerialPortHelp();
+    }
+    else if (subCmd == "enable") {
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putBool("enabled", true);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.println("[SerialPort] ✓ Enabled (reboot to apply)");
+    }
+    else if (subCmd == "disable") {
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putBool("enabled", false);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.println("[SerialPort] ✓ Disabled (reboot to apply)");
+    }
+    else if (subCmd == "baudrate" || subCmd == "baud") {
+        if (subArgs.length() == 0) {
+            Serial.println("[SerialPort] ✗ Error: Baud rate required");
+            Serial.println("Usage: serialport baudrate <rate>");
+            Serial.println("Common rates: 2400, 4800, 9600, 19200, 38400, 57600, 115200");
+            return;
+        }
+        uint32_t baud = (uint32_t)subArgs.toInt();
+        if (baud < 300 || baud > 921600) {
+            Serial.println("[SerialPort] ✗ Error: Invalid baud rate (300–921600)");
+            return;
+        }
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putULong("baudrate", baud);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.printf("[SerialPort] ✓ Baud rate set to %lu (reboot to apply)\n", baud);
+    }
+    else if (subCmd == "databits" || subCmd == "bits") {
+        uint8_t bits = (uint8_t)subArgs.toInt();
+        if (bits < 5 || bits > 8) {
+            Serial.println("[SerialPort] ✗ Error: Data bits must be 5, 6, 7, or 8");
+            return;
+        }
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+        serialportPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        serialport_decodeConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = serialport_buildConfig(bits, oldParity, oldStop);
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putULong("config", newCfg);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.printf("[SerialPort] ✓ Data bits set to %d (reboot to apply)\n", bits);
+    }
+    else if (subCmd == "parity") {
+        subArgs.toLowerCase();
+        char p;
+        if      (subArgs == "none" || subArgs == "n") p = 'N';
+        else if (subArgs == "even" || subArgs == "e") p = 'E';
+        else if (subArgs == "odd"  || subArgs == "o") p = 'O';
+        else {
+            Serial.println("[SerialPort] ✗ Error: Parity must be none, even, or odd");
+            return;
+        }
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+        serialportPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        serialport_decodeConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = serialport_buildConfig(oldBits, p, oldStop);
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putULong("config", newCfg);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.printf("[SerialPort] ✓ Parity set to %s (reboot to apply)\n",
+            p == 'N' ? "None" : (p == 'E' ? "Even" : "Odd"));
+    }
+    else if (subCmd == "stopbits" || subCmd == "stop") {
+        uint8_t stop = (uint8_t)subArgs.toInt();
+        if (stop < 1 || stop > 2) {
+            Serial.println("[SerialPort] ✗ Error: Stop bits must be 1 or 2");
+            return;
+        }
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+        serialportPref.end();
+        uint8_t oldBits; char oldParity; uint8_t oldStop;
+        serialport_decodeConfig(cfg, oldBits, oldParity, oldStop);
+        uint32_t newCfg = serialport_buildConfig(oldBits, oldParity, stop);
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        serialportPref.putULong("config", newCfg);
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.printf("[SerialPort] ✓ Stop bits set to %d (reboot to apply)\n", stop);
+    }
+    else if (subCmd == "config" || subCmd == "show") {
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        bool en  = serialportPref.getBool("enabled", false);
+        uint32_t baud = serialportPref.getULong("baudrate", 9600);
+        uint32_t cfg  = serialportPref.getULong("config",   SERIAL_8N1);
+        serialportPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        serialport_decodeConfig(cfg, bits, parity, stop);
+        Serial.println("=== Serial Port (UART2) Config ===");
+        Serial.printf("  Enabled:    %s\n", en ? "Yes" : "No");
+        Serial.printf("  Baud rate:  %lu\n", baud);
+        Serial.printf("  Data bits:  %d\n",  bits);
+        Serial.printf("  Parity:     %s\n",  parity == 'N' ? "None" : (parity == 'E' ? "Even" : "Odd"));
+        Serial.printf("  Stop bits:  %d\n",  stop);
+        Serial.printf("  Format:     %d%c%d\n", bits, parity, stop);
+        Serial.printf("  TX Pin:     %d\n",  TX2_PIN);
+        Serial.printf("  RX Pin:     %d\n",  RX2_PIN);
+        Serial.println("==================================");
+    }
+    else if (subCmd == "status") {
+        Serial.println("=== Serial Port (UART2) Status ===");
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        Serial.printf("  Enabled (saved): %s\n", serialportPref.getBool("enabled", false) ? "Yes" : "No");
+        serialportPref.end();
+        Serial.printf("  Running:         %s\n", serialPortIsRunning() ? "Yes" : "No");
+        Serial.printf("  TX Pin:          %d\n", TX2_PIN);
+        Serial.printf("  RX Pin:          %d\n", RX2_PIN);
+        Serial.println("==================================");
+    }
+    else {
+        Serial.printf("[SerialPort] ✗ Unknown command: %s\n", subCmd.c_str());
+        printSerialPortHelp();
+    }
+}
+
+
 // ==================== COMMAND EXECUTOR ====================
 void executeCommand(String cmd, String args) {
     cmd.trim();
@@ -1460,6 +1617,9 @@ void executeCommand(String cmd, String args) {
     }
     else if (cmd == "rs485modbus" || cmd == "rs485" || cmd == "modbus") {
         handleRS485ModbusCommand(args);
+    }
+    else if (cmd == "serialport" || cmd == "uart2" || cmd == "serial2") {
+        handleSerialPortCommand(args);
     }
     else if (cmd == "rtc") {
         handleRTCCommand(args);

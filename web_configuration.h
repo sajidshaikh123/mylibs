@@ -31,8 +31,13 @@ extern Preferences ethernetPref;
 extern Preferences mqttPref;
 extern Preferences hmiPref;
 extern Preferences rs485ModbusPref;
+extern Preferences serialportPref;
+extern Preferences shiftPref;
 extern Preferences settingsPref;
 extern bool rs485ModbusEnabled;
+extern bool serialportEnabled;
+extern bool shiftEnabled;
+extern uint8_t shiftNumShifts;
 extern bool usbScannerEnabled;
 extern String lastResetReason;
 extern RTCManager rtc;
@@ -124,30 +129,44 @@ const char index_html[] PROGMEM = R"rawliteral(
         .header h1 { font-size: 28px; margin-bottom: 10px; }
         .header p { opacity: 0.9; font-size: 14px; }
         
+        .page-body {
+            display: flex;
+            align-items: flex-start;
+        }
         .tabs {
             display: flex;
+            flex-direction: column;
+            width: 160px;
+            min-width: 160px;
             background: #f5f5f5;
-            border-bottom: 2px solid #ddd;
-            overflow-x: auto;
+            border-right: 2px solid #ddd;
+            padding: 8px 0;
+            position: sticky;
+            top: 0;
+            max-height: 100vh;
+            overflow-y: auto;
         }
         .tab {
-            padding: 15px 25px;
+            padding: 12px 18px;
             cursor: pointer;
             border: none;
             background: transparent;
-            font-size: 14px;
-            color: #666;
-            transition: all 0.3s;
+            font-size: 13px;
+            color: #555;
+            transition: all 0.2s;
             white-space: nowrap;
+            text-align: left;
+            border-left: 3px solid transparent;
         }
-        .tab:hover { background: #e0e0e0; }
+        .tab:hover { background: #e8e8e8; color: #333; }
         .tab.active {
             background: white;
             color: #667eea;
-            border-bottom: 3px solid #667eea;
+            border-left: 3px solid #667eea;
+            font-weight: 600;
         }
         
-        .content { padding: 30px; }
+        .content { padding: 30px; flex: 1; min-width: 0; }
         .tab-content { display: none; }
         .tab-content.active { display: block; animation: fadeIn 0.3s; }
         
@@ -455,7 +474,10 @@ const char index_html[] PROGMEM = R"rawliteral(
         @media (max-width: 768px) {
             .container { margin: 10px; }
             .content { padding: 15px; }
-            .tabs { overflow-x: scroll; }
+            .page-body { flex-direction: column; }
+            .tabs { flex-direction: row; width: 100%; min-width: unset; border-right: none; border-bottom: 2px solid #ddd; overflow-x: auto; overflow-y: hidden; padding: 0; position: static; max-height: none; }
+            .tab { border-left: none; border-bottom: 3px solid transparent; }
+            .tab.active { border-left: none; border-bottom: 3px solid #667eea; }
             .file-item {
                 flex-direction: column;
                 align-items: flex-start;
@@ -474,6 +496,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             <p>Production Monitoring System v1.1.0</p>
         </div>
         
+        <div class="page-body">
         <div class="tabs">
             <button class="tab active" onclick="showTab('system', this)">📊 System</button>
             <button class="tab" onclick="showTab('network', this)">🌐 Network</button>
@@ -481,6 +504,8 @@ const char index_html[] PROGMEM = R"rawliteral(
             <button class="tab" onclick="showTab('rtc', this)">🕐 RTC</button>
             <button class="tab" onclick="showTab('hmi', this)">🖥️ HMI</button>
             <button class="tab" onclick="showTab('rs485modbus', this)">🔌 RS485</button>
+            <button class="tab" onclick="showTab('serialport', this)">🔗 Serial Port</button>
+            <button class="tab" onclick="showTab('shifts', this)">🕒 Shifts</button>
             <button class="tab" onclick="showTab('io', this)">⚡ IO</button>
             <button class="tab" onclick="showTab('files', this)">📁 Files</button>
             <button class="tab" onclick="showTab('firmware', this)">⬆️ Firmware</button>
@@ -881,6 +906,98 @@ const char index_html[] PROGMEM = R"rawliteral(
                 </div>
             </div>
 
+            <!-- Serial Port (UART2) Tab -->
+            <div id="serialport" class="tab-content">
+                <div class="card">
+                    <h3>Serial Port (UART2) Configuration</h3>
+                    <p style="color:#e67e22;font-size:13px;margin-bottom:15px;">
+                        ⚠️ UART2 is shared with RS485 Modbus RTU. Enable only one at a time.
+                        Pins: TX=TX2_PIN, RX=RX2_PIN
+                    </p>
+                    <div class="form-group">
+                        <label>Serial Port Enabled</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="serialportEnabled">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
+                        <label>Running Status</label>
+                        <div class="value" id="serialportRunning">-</div>
+                    </div>
+                    <div class="form-group">
+                        <label>Baud Rate</label>
+                        <select id="serialportBaudrate">
+                            <option value="2400">2400</option>
+                            <option value="4800">4800</option>
+                            <option value="9600" selected>9600</option>
+                            <option value="19200">19200</option>
+                            <option value="38400">38400</option>
+                            <option value="57600">57600</option>
+                            <option value="115200">115200</option>
+                            <option value="230400">230400</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Data Bits</label>
+                        <select id="serialportDatabits">
+                            <option value="5">5</option>
+                            <option value="6">6</option>
+                            <option value="7">7</option>
+                            <option value="8" selected>8</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Parity</label>
+                        <select id="serialportParity">
+                            <option value="N" selected>None</option>
+                            <option value="E">Even</option>
+                            <option value="O">Odd</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Stop Bits</label>
+                        <select id="serialportStopbits">
+                            <option value="1" selected>1</option>
+                            <option value="2">2</option>
+                        </select>
+                    </div>
+                    <p style="color: #666; font-size: 14px; margin-top: 10px;">
+                        ⚠️ Changes require device reboot to take effect
+                    </p>
+                    <button class="btn btn-primary" onclick="saveSerialPortConfig()">💾 Save Serial Port Config</button>
+                </div>
+            </div>
+
+            <!-- Shifts Tab -->
+            <div id="shifts" class="tab-content">
+                <div class="card">
+                    <h3>🕒 Shift Details Configuration</h3>
+                    <div class="form-group">
+                        <label>Shift Tracking Enabled</label>
+                        <label class="toggle">
+                            <input type="checkbox" id="shiftEnabled" onchange="onShiftEnableChange()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div id="shift_main_fields">
+                        <div class="form-group">
+                            <label>Number of Shifts</label>
+                            <select id="shiftNum" onchange="renderShiftForms()">
+                                <option value="1">1 Shift</option>
+                                <option value="2">2 Shifts</option>
+                                <option value="3">3 Shifts</option>
+                            </select>
+                        </div>
+                        <div id="shiftForms"></div>
+                    </div>
+                    <p style="color:#666;font-size:14px;margin-top:10px;">
+                        ⚠️ Time format: HH:MM:SS &nbsp;|&nbsp; Leave break fields empty if unused.
+                    </p>
+                    <button class="btn btn-primary" onclick="saveShiftConfig()">💾 Save Shift Config</button>
+                </div>
+            </div>
+
             <!-- IO Tab -->
             <div id="io" class="tab-content">
                 <div class="card">
@@ -1037,6 +1154,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                 </div>
             </div>
         </div>
+        </div><!-- end page-body -->
     </div>
 
     <script>
@@ -1347,7 +1465,134 @@ const char index_html[] PROGMEM = R"rawliteral(
             };
             apiCall('/api/rs485modbus/config', 'POST', data);
         }
-        
+
+        function saveSerialPortConfig() {
+            const data = {
+                enabled:  document.getElementById('serialportEnabled').checked,
+                baudrate: parseInt(document.getElementById('serialportBaudrate').value),
+                databits: parseInt(document.getElementById('serialportDatabits').value),
+                parity:   document.getElementById('serialportParity').value,
+                stopbits: parseInt(document.getElementById('serialportStopbits').value)
+            };
+            apiCall('/api/serialport/config', 'POST', data);
+        }
+
+        // ── Shift helpers ─────────────────────────────────────────────────────
+        var _shiftData = { enabled:false, num_shifts:1, shifts:[
+            {name:'Morning',  start:'06:00', end:'14:00', breaks:[{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'}]},
+            {name:'Afternoon',start:'14:00', end:'22:00', breaks:[{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'}]},
+            {name:'Night',    start:'22:00', end:'06:00', breaks:[{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'},{start:'00:00',end:'00:00'}]}
+        ]};
+
+        function onShiftEnableChange() {
+            var en = document.getElementById('shiftEnabled').checked;
+            document.getElementById('shift_main_fields').style.display = en ? 'block' : 'none';
+        }
+
+        function _shiftField(id, dflt) {
+            var el = document.getElementById(id);
+            return el ? el.value.trim() || dflt : dflt;
+        }
+
+        function renderShiftForms() {
+            var n = parseInt(document.getElementById('shiftNum').value) || 1;
+            var names = ['Morning','Afternoon','Night'];
+            var html = '';
+            for (var i = 0; i < n; i++) {
+                var s = _shiftData.shifts[i] || {};
+                var nm = s.name  || names[i];
+                var st = s.start || '06:00';
+                var en = s.end   || '14:00';
+                html += '<div style="border:1px solid #e0e0e0;border-radius:8px;padding:16px;margin-top:14px">';
+                html += '<div style="font-weight:600;margin-bottom:10px">Shift ' + (i+1) + '</div>';
+                html += '<div class="form-group"><label>Name</label><input type="text" id="sn'+(i+1)+'_name" value="'+nm+'" maxlength="23" style="width:160px"></div>';
+                html += '<div class="form-group"><label>Start Time</label><input type="time" id="sn'+(i+1)+'_start" value="'+st+'"></div>';
+                html += '<div class="form-group"><label>End Time</label><input type="time" id="sn'+(i+1)+'_end" value="'+en+'"></div>';
+                html += '<div style="font-size:13px;color:#555;margin:10px 0 6px">Breaks &mdash; set both to 00:00 if unused</div>';
+                for (var m = 1; m <= 3; m++) {
+                    var b = (s.breaks && s.breaks[m-1]) || {};
+                    var bs = b.start||'00:00'; var be = b.end||'00:00';
+                    html += '<div style="display:flex;gap:10px;align-items:center;margin-bottom:6px">';
+                    html += '<span style="min-width:55px;font-size:13px">Break '+m+'</span>';
+                    html += '<label style="font-size:12px;color:#888">Start</label><input type="time" id="sn'+(i+1)+'_b'+m+'s" value="'+bs+'">';
+                    html += '<label style="font-size:12px;color:#888">End</label><input type="time" id="sn'+(i+1)+'_b'+m+'e" value="'+be+'">';
+                    html += '</div>';
+                }
+                html += '</div>';
+            }
+            document.getElementById('shiftForms').innerHTML = html;
+        }
+
+        // Convert "HH:MM" to minutes-since-midnight for comparison
+        function _toMin(t) {
+            if (!t || t === '00:00') return -1; // -1 = "no break / disabled"
+            var p = t.split(':');
+            return parseInt(p[0]||0)*60 + parseInt(p[1]||0);
+        }
+        // Normalize overnight shift end: if end <= start, add 1440 (24h)
+        function _shiftRange(st, en) {
+            var s = _toMin(st); var e = _toMin(en);
+            if (e <= s) e += 1440;
+            return {s:s, e:e};
+        }
+        function _timeInRange(t, shiftS, shiftE) {
+            var m = _toMin(t);
+            if (m === -1) return true; // 00:00 = disabled, always valid
+            if (shiftE > 1440) { // overnight
+                return (m >= shiftS) || (m <= shiftE - 1440);
+            }
+            return m >= shiftS && m <= shiftE;
+        }
+
+        function saveShiftConfig() {
+            var n = parseInt(document.getElementById('shiftNum').value) || 1;
+            var errors = [];
+            var shifts = [];
+
+            for (var i = 1; i <= 3; i++) {
+                var st  = _shiftField('sn'+i+'_start', '06:00');
+                var en  = _shiftField('sn'+i+'_end',   '14:00');
+                var nm  = _shiftField('sn'+i+'_name',  ['Morning','Afternoon','Night'][i-1]);
+                var rng = _shiftRange(st, en);
+                var brks = [];
+                for (var m = 1; m <= 3; m++) {
+                    var bs = _shiftField('sn'+i+'_b'+m+'s', '00:00');
+                    var be = _shiftField('sn'+i+'_b'+m+'e', '00:00');
+                    var bsMin = _toMin(bs); var beMin = _toMin(be);
+                    // Only validate if this shift is within the active count
+                    if (i <= n) {
+                        var bsDis = (bsMin === -1); var beDis = (beMin === -1);
+                        if (!bsDis || !beDis) {
+                            // One side set but not the other
+                            if (bsDis !== beDis) {
+                                errors.push('Shift '+i+' Break '+m+': both start and end must be set (or both 00:00).');
+                            } else {
+                                if (!_timeInRange(bs, rng.s, rng.e))
+                                    errors.push('Shift '+i+' Break '+m+' start ('+bs+') is outside shift time ('+st+' \u2013 '+en+').');
+                                if (!_timeInRange(be, rng.s, rng.e))
+                                    errors.push('Shift '+i+' Break '+m+' end ('+be+') is outside shift time ('+st+' \u2013 '+en+').');
+                                if (bsMin !== -1 && beMin !== -1 && beMin <= bsMin)
+                                    errors.push('Shift '+i+' Break '+m+': end time must be after start time.');
+                            }
+                        }
+                    }
+                    brks.push({ start: bs, end: be });
+                }
+                shifts.push({ name: nm, start: st, end: en, breaks: brks });
+            }
+
+            if (errors.length > 0) {
+                showAlert('\u26a0 Validation failed:\n\u2022 ' + errors.join('\n\u2022 '), 'error');
+                return;
+            }
+
+            apiCall('/api/shift/config', 'POST', {
+                enabled:    document.getElementById('shiftEnabled').checked,
+                num_shifts: n,
+                shifts:     shifts
+            });
+        }
+
         function setRTC() {
             let datetime = document.getElementById('rtcInput').value;
             if (!datetime) {
@@ -1905,6 +2150,27 @@ const char index_html[] PROGMEM = R"rawliteral(
                 document.getElementById('rs485Stopbits').value = rs485Config.stopbits || 1;
             }
 
+            // Load Serial Port config
+            const spConfig = await apiCall('/api/serialport/config');
+            if (spConfig.success) {
+                document.getElementById('serialportEnabled').checked = spConfig.enabled;
+                document.getElementById('serialportRunning').textContent = spConfig.running ? 'Running' : 'Stopped';
+                document.getElementById('serialportBaudrate').value = spConfig.baudrate || 9600;
+                document.getElementById('serialportDatabits').value = spConfig.databits || 8;
+                document.getElementById('serialportParity').value   = spConfig.parity   || 'N';
+                document.getElementById('serialportStopbits').value = spConfig.stopbits || 1;
+            }
+
+            // Load Shift config
+            const shiftConfig = await apiCall('/api/shift/config');
+            if (shiftConfig.success) {
+                _shiftData = shiftConfig;
+                document.getElementById('shiftEnabled').checked = !!shiftConfig.enabled;
+                document.getElementById('shiftNum').value = shiftConfig.num_shifts || 1;
+                onShiftEnableChange();
+                renderShiftForms();
+            }
+
             // Load IO config
             const ioConfig = await apiCall('/api/io/config');
             if (ioConfig.success) {
@@ -2391,6 +2657,80 @@ void handleRS485ModbusConfig(AsyncWebServerRequest *request) {
         rs485ModbusPref.end();
         
         request->send(200, "application/json", "{\"success\":true,\"message\":\"RS485 Modbus config saved. Reboot required.\"}");
+    }
+}
+
+
+void handleSerialPortConfig(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+
+    if (request->method() == HTTP_GET) {
+        DynamicJsonDocument doc(512);
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        doc["success"] = true;
+        doc["enabled"] = serialportPref.getBool("enabled", false);
+        doc["running"] = serialPortIsRunning();
+        doc["baudrate"] = serialportPref.getULong("baudrate", 9600);
+        uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+        serialportPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        serialport_decodeConfig(cfg, bits, parity, stop);
+        doc["databits"] = bits;
+        char parityStr[2] = {parity, '\0'};
+        doc["parity"] = parityStr;
+        doc["stopbits"] = stop;
+
+        String response;
+        serializeJson(doc, response);
+        request->send(200, "application/json", response);
+    }
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
+            return;
+        }
+
+        serialportPref.begin(SERIALPORT_PREF_NS, false);
+        if (doc.containsKey("enabled"))  serialportPref.putBool("enabled",   doc["enabled"]);
+        if (doc.containsKey("baudrate")) serialportPref.putULong("baudrate",  doc["baudrate"].as<uint32_t>());
+        if (doc.containsKey("databits") || doc.containsKey("parity") || doc.containsKey("stopbits")) {
+            uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+            uint8_t bits; char parity; uint8_t stop;
+            serialport_decodeConfig(cfg, bits, parity, stop);
+            if (doc.containsKey("databits")) bits = doc["databits"].as<uint8_t>();
+            if (doc.containsKey("parity")) {
+                String p = doc["parity"].as<String>();
+                if (p.length() > 0) parity = p.charAt(0);
+            }
+            if (doc.containsKey("stopbits")) stop = doc["stopbits"].as<uint8_t>();
+            serialportPref.putULong("config", serialport_buildConfig(bits, parity, stop));
+        }
+        serialportPref.end();
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+
+        request->send(200, "application/json", "{\"success\":true,\"message\":\"Serial Port config saved. Reboot required.\"}");
+    }
+}
+
+// ── GET|POST /api/shift/config ────────────────────────────────────────────────
+void handleShiftConfig(AsyncWebServerRequest *request) {
+    if (!checkAuthentication(request)) return;
+
+    if (request->method() == HTTP_GET) {
+        request->send(200, "application/json", shiftDetailsToJson());
+    }
+    else if (strcmp(request->methodToString(), "POST") == 0) {
+        String body = getRequestBody(request);
+        if (shiftDetailsFromJson(body)) {
+            request->send(200, "application/json",
+                          "{\"success\":true,\"message\":\"Shift config saved.\"}");
+        } else {
+            request->send(400, "application/json",
+                          "{\"success\":false,\"message\":\"Invalid JSON or no changes.\"}");
+        }
     }
 }
 
@@ -3020,6 +3360,8 @@ void setupWebServer() {
     webServer.on("/api/subtopic/config", HTTP_ANY, handleSubtopicConfig, NULL, handleJsonBody);
     webServer.on("/api/hmi/config", HTTP_ANY, handleHMIConfig, NULL, handleJsonBody);
     webServer.on("/api/rs485modbus/config", HTTP_ANY, handleRS485ModbusConfig, NULL, handleJsonBody);
+    webServer.on("/api/serialport/config", HTTP_ANY, handleSerialPortConfig, NULL, handleJsonBody);
+    webServer.on("/api/shift/config",      HTTP_ANY, handleShiftConfig,      NULL, handleJsonBody);
     webServer.on("/api/rtc/set", HTTP_POST, handleRTCSet, NULL, handleJsonBody);
     webServer.on("/api/system/reboot", HTTP_POST, handleSystemReboot);
     webServer.on("/api/system/factory", HTTP_POST, handleFactoryReset);
@@ -3594,6 +3936,69 @@ void handleEthWebClients() {
             }
             rs485ModbusPref.end();
             ethSendJSON(client, 200, "{\"success\":true,\"message\":\"RS485 Modbus config saved. Reboot required.\"}");
+        }
+    }
+
+    // --- GET /api/serialport/config ---
+    else if (path == "/api/serialport/config" && method == "GET") {
+        DynamicJsonDocument doc(512);
+        serialportPref.begin(SERIALPORT_PREF_NS, true);
+        doc["success"] = true;
+        doc["enabled"] = serialportPref.getBool("enabled", false);
+        doc["running"] = serialPortIsRunning();
+        doc["baudrate"] = serialportPref.getULong("baudrate", 9600);
+        uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+        serialportPref.end();
+        uint8_t bits; char parity; uint8_t stop;
+        serialport_decodeConfig(cfg, bits, parity, stop);
+        doc["databits"] = bits;
+        char parityStr[2] = {parity, '\0'};
+        doc["parity"] = parityStr;
+        doc["stopbits"] = stop;
+        String response;
+        serializeJson(doc, response);
+        ethSendJSON(client, 200, response);
+    }
+
+    // --- POST /api/serialport/config ---
+    else if (path == "/api/serialport/config" && method == "POST") {
+        DynamicJsonDocument doc(512);
+        DeserializationError error = deserializeJson(doc, body);
+        if (error) {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
+        } else {
+            serialportPref.begin(SERIALPORT_PREF_NS, false);
+            if (doc.containsKey("enabled"))  serialportPref.putBool("enabled",  doc["enabled"]);
+            if (doc.containsKey("baudrate")) serialportPref.putULong("baudrate", doc["baudrate"].as<uint32_t>());
+            if (doc.containsKey("databits") || doc.containsKey("parity") || doc.containsKey("stopbits")) {
+                uint32_t cfg = serialportPref.getULong("config", SERIAL_8N1);
+                uint8_t bits; char parity; uint8_t stop;
+                serialport_decodeConfig(cfg, bits, parity, stop);
+                if (doc.containsKey("databits")) bits = doc["databits"].as<uint8_t>();
+                if (doc.containsKey("parity")) {
+                    String p = doc["parity"].as<String>();
+                    if (p.length() > 0) parity = p.charAt(0);
+                }
+                if (doc.containsKey("stopbits")) stop = doc["stopbits"].as<uint8_t>();
+                serialportPref.putULong("config", serialport_buildConfig(bits, parity, stop));
+            }
+            serialportPref.end();
+            serialportPref.begin(SERIALPORT_PREF_NS, true);
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Serial Port config saved. Reboot required.\"}");
+        }
+    }
+
+    // --- GET /api/shift/config ---
+    else if (path == "/api/shift/config" && method == "GET") {
+        ethSendJSON(client, 200, shiftDetailsToJson());
+    }
+
+    // --- POST /api/shift/config ---
+    else if (path == "/api/shift/config" && method == "POST") {
+        if (shiftDetailsFromJson(body)) {
+            ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Shift config saved.\"}");
+        } else {
+            ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON or no changes.\"}");
         }
     }
 

@@ -17,7 +17,7 @@ class WeighingScale {
     WeighingScale(uint8_t dout = HX711_DOUT, uint8_t sck = HX711_SCK, float calib = 1.0f);
 
     bool begin();
-    uint16_t readWeight(bool applyTare = false);
+    float readWeight(bool applyTare = false);
     float readraw();
     void tare();
     void setCalibration(float factor);

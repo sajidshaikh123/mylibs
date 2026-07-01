@@ -57,6 +57,7 @@ RTCManager rtc(0);
 #include "pindefinition.h"
 #include "pixel_led.h"
 #include "RS485_modbus_RTU.h"
+#include "serialport.h"
 #include "serial_scanner.h"
 #include "string_functions.h"
 
@@ -75,6 +76,7 @@ RTCManager rtc(0);
 #include <ESP32Ping.h>
 #include "serial_manager.h"
 #include "shift_timing.h"
+#include "shift_details.h"
 #include "mqtt_publisher.h"
 
 // Forward-declare globals needed by firmware_update.h and mac_process.h
@@ -173,7 +175,9 @@ Preferences hmiPref;
 Preferences tcpModbusPref;
 Preferences settingsPref;
 Preferences rs485ModbusPref;
+Preferences serialportPref;
 
+bool serialportEnabled = false;  // Cache serial port enabled status
 
 String mqttTransport = "auto"; // Cache MQTT transport type
 String lastResetReason = "Unknown"; // Last boot reset reason (set in boardinit)
@@ -710,6 +714,22 @@ void boardinit(){
     }
     rs485ModbusPref.end();
     yield(); // Feed watchdog
+
+    // Initialize Serial Port (UART2) if enabled
+    serialportPref.begin(SERIALPORT_PREF_NS, true);
+    serialportEnabled = serialportPref.getBool("enabled", false);
+    serialportPref.end();
+    if (serialportEnabled) {
+        Serial.println("Initializing Serial Port (UART2)...");
+        serialPortInit();
+    } else {
+        Serial.println("Serial Port (UART2) disabled in preferences.");
+    }
+    yield(); // Feed watchdog
+
+    // Initialize Shift Details
+    shiftDetailsInit();
+    yield();
 
     // Don't start web servers here - start them after network is ready
     // setupWebServer(); 

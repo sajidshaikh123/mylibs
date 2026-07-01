@@ -24,15 +24,15 @@ bool WeighingScale::begin() {
   return false;
 }
 
-uint16_t WeighingScale::readWeight(bool applyTare) {
+float WeighingScale::readWeight(bool applyTare) {
   if (!status) return 0.0f;  //  Don't proceed if HX711 not OK
   if (applyTare) scale.tare();
-  scale.set_scale(calibrationFactor);
-  return scale.get_units(10);
+  // scale.set_scale(calibrationFactor);
+  return scale.get_units(1);
 }
 float WeighingScale::readraw() {
   
-  return scale.get_value(10);
+  return scale.get_value(1);
 }
 
 void WeighingScale::tare() {
