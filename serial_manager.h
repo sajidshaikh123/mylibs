@@ -90,6 +90,7 @@ void printWiFiHelp() {
     Serial.println("  wifi disable             - Disable WiFi");
     Serial.println("  wifi ssid <ssid>         - Set WiFi SSID");
     Serial.println("  wifi password <pass>     - Set WiFi password");
+    Serial.println("  wifi security <wpa|none> - Set security (WPA/WPA2-PSK or open)");
     Serial.println("  wifi dhcp                - Use DHCP (auto IP)");
     Serial.println("  wifi static              - Use static IP");
     Serial.println("  wifi ip <ip>             - Set static IP address");
@@ -177,21 +178,11 @@ void handleWiFiCommand(String args) {
         printWiFiHelp();
     }
     else if (subCmd == "enable") {
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putBool("enabled", true);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putBool("enabled", true); p.end(); }
         Serial.println("[WiFi] ✓ Enabled (will connect on next boot)");
     }
     else if (subCmd == "disable") {
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putBool("enabled", false);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putBool("enabled", false); p.end(); }
         WiFi.disconnect(true);
         Serial.println("[WiFi] ✓ Disabled");
     }
@@ -207,12 +198,7 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("ssid", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("ssid", subArgs); p.end(); }
         Serial.printf("[WiFi] ✓ SSID set to: %s\n", subArgs.c_str());
     }
     else if (subCmd == "password" || subCmd == "pass") {
@@ -227,31 +213,45 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("password", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("password", subArgs); p.end(); }
         Serial.println("[WiFi] ✓ Password saved");
     }
+    else if (subCmd == "security" || subCmd == "sec") {
+        if (subArgs.length() == 0) {
+            Preferences p; p.begin("wifi", true);
+            String cur = p.getString("security", "wpa");
+            p.end();
+            Serial.printf("[WiFi] Current security: %s\n", cur.c_str());
+            Serial.println("Usage: wifi security <wpa|none>");
+            Serial.println("  wpa  - WPA/WPA2-PSK (password required, min 8 chars)");
+            Serial.println("  none - Open network (no password)");
+            return;
+        }
+        String sec = subArgs;
+        sec.toLowerCase();
+        if (sec != "wpa" && sec != "none") {
+            Serial.println("[WiFi] ✗ Error: Invalid security option. Use 'wpa' or 'none'");
+            return;
+        }
+        if (sec == "wpa") {
+            // Warn if password not yet set or too short
+            Preferences _p; _p.begin("wifi", true);
+            String pwd = _p.getString("password", "");
+            _p.end();
+            if (pwd.length() < 8) {
+                Serial.println("[WiFi] ⚠ Warning: WPA requires a password (min 8 chars). Set one with: wifi password <pass>");
+            }
+        }
+        { Preferences p; p.begin("wifi", false); p.putString("security", sec); if (sec == "none") p.putString("password", ""); p.end(); }
+        Serial.printf("[WiFi] ✓ Security set to: %s\n", sec.c_str());
+    }
     else if (subCmd == "dhcp") {
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putBool("dhcp", true);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putBool("dhcp", true); p.end(); }
         Serial.println("[WiFi] ✓ DHCP mode enabled");
         Serial.println("[WiFi] Reconnect to apply changes");
     }
     else if (subCmd == "static") {
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putBool("dhcp", false);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putBool("dhcp", false); p.end(); }
         Serial.println("[WiFi] ✓ Static IP mode enabled");
         Serial.println("[WiFi] Configure IP, gateway, subnet, and DNS");
         Serial.println("[WiFi] Reconnect to apply changes");
@@ -271,12 +271,7 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("ip", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("ip", subArgs); p.end(); }
         Serial.printf("[WiFi] ✓ IP address set to: %s\n", subArgs.c_str());
     }
     else if (subCmd == "gateway") {
@@ -293,12 +288,7 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("gateway", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("gateway", subArgs); p.end(); }
         Serial.printf("[WiFi] ✓ Gateway set to: %s\n", subArgs.c_str());
     }
     else if (subCmd == "subnet") {
@@ -315,12 +305,7 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("subnet", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("subnet", subArgs); p.end(); }
         Serial.printf("[WiFi] ✓ Subnet mask set to: %s\n", subArgs.c_str());
     }
     else if (subCmd == "dns") {
@@ -337,18 +322,23 @@ void handleWiFiCommand(String args) {
             return;
         }
         
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.putString("dns", subArgs);
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.putString("dns", subArgs); p.end(); }
         Serial.printf("[WiFi] ✓ DNS server set to: %s\n", subArgs.c_str());
     }
     else if (subCmd == "connect") {
-        String ssid = wifiPref.getString("ssid", "");
-        String password = wifiPref.getString("password", "");
-        bool useDHCP = wifiPref.getBool("dhcp", true);
+        String ssid, password, ipStr, gatewayStr, subnetStr, dnsStr;
+        bool useDHCP;
+        {
+            Preferences _cp; _cp.begin("wifi", true);
+            ssid = _cp.getString("ssid", "");
+            password = _cp.getString("password", "");
+            useDHCP = _cp.getBool("dhcp", true);
+            ipStr = _cp.getString("ip", "");
+            gatewayStr = _cp.getString("gateway", "");
+            subnetStr = _cp.getString("subnet", "");
+            dnsStr = _cp.getString("dns", "");
+            _cp.end();
+        }
         
         if (ssid.length() == 0) {
             Serial.println("[WiFi] ✗ Error: No SSID configured");
@@ -361,10 +351,7 @@ void handleWiFiCommand(String args) {
         
         // Configure static IP if enabled
         if (!useDHCP) {
-            String ipStr = wifiPref.getString("ip", "");
-            String gatewayStr = wifiPref.getString("gateway", "");
-            String subnetStr = wifiPref.getString("subnet", "");
-            String dnsStr = wifiPref.getString("dns", "");
+            // ipStr, gatewayStr, subnetStr, dnsStr already read above
             
             if (ipStr.length() == 0) {
                 Serial.println("[WiFi] ✗ Error: Static IP not configured");
@@ -413,11 +400,7 @@ void handleWiFiCommand(String args) {
             Serial.printf("[WiFi] Signal: %d dBm\n", WiFi.RSSI());
             
             // Auto-enable on successful connection
-            wifiPref.end();
-            wifiPref.begin("wifi", false);
-            wifiPref.putBool("enabled", true);
-            wifiPref.end();
-            wifiPref.begin("wifi", true);
+            { Preferences p; p.begin("wifi", false); p.putBool("enabled", true); p.end(); }
         } else {
             Serial.println("[WiFi] ✗ Connection failed");
             Serial.print("[WiFi] Status: ");
@@ -436,9 +419,10 @@ void handleWiFiCommand(String args) {
     }
     else if (subCmd == "status") {
         Serial.println("=== WiFi Status ===");
-        
-        bool enabled = wifiPref.getBool("enabled", false);
-        bool useDHCP = wifiPref.getBool("dhcp", true);
+        Preferences _sp; _sp.begin("wifi", true);
+        bool enabled = _sp.getBool("enabled", false);
+        bool useDHCP = _sp.getBool("dhcp", true);
+        _sp.end();
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         Serial.printf("Mode: %s\n", useDHCP ? "DHCP" : "Static IP");
         
@@ -494,20 +478,23 @@ void handleWiFiCommand(String args) {
     }
     else if (subCmd == "show") {
         Serial.println("=== Saved WiFi Configuration ===");
-        
-        bool enabled = wifiPref.getBool("enabled", false);
-        bool useDHCP = wifiPref.getBool("dhcp", true);
-        String ssid = wifiPref.getString("ssid", "");
-        String password = wifiPref.getString("password", "");
-        String ip = wifiPref.getString("ip", "");
-        String gateway = wifiPref.getString("gateway", "");
-        String subnet = wifiPref.getString("subnet", "");
-        String dns = wifiPref.getString("dns", "");
+        Preferences _rp; _rp.begin("wifi", true);
+        bool enabled = _rp.getBool("enabled", false);
+        bool useDHCP = _rp.getBool("dhcp", true);
+        String ssid = _rp.getString("ssid", "");
+        String password = _rp.getString("password", "");
+        String ip = _rp.getString("ip", "");
+        String gateway = _rp.getString("gateway", "");
+        String subnet = _rp.getString("subnet", "");
+        String dns = _rp.getString("dns", "");
+        String security = _rp.getString("security", "wpa");
+        _rp.end();
         
         Serial.printf("Enabled: %s\n", enabled ? "Yes" : "No");
         Serial.printf("Mode: %s\n", useDHCP ? "DHCP" : "Static IP");
         Serial.printf("SSID: %s\n", ssid.length() > 0 ? ssid.c_str() : "(not set)");
         Serial.printf("Password: %s\n", password.length() > 0 ? "********" : "(not set)");
+        Serial.printf("Security: %s\n", security.c_str());
         
         if (!useDHCP) {
             Serial.printf("IP Address: %s\n", ip.length() > 0 ? ip.c_str() : "(not set)");
@@ -518,12 +505,7 @@ void handleWiFiCommand(String args) {
         Serial.println("================================");
     }
     else if (subCmd == "clear") {
-        wifiPref.end();
-        wifiPref.begin("wifi", false);
-        wifiPref.clear();
-        wifiPref.end();
-        wifiPref.begin("wifi", true);
-        
+        { Preferences p; p.begin("wifi", false); p.clear(); p.end(); }
         WiFi.disconnect(true);
         Serial.println("[WiFi] ✓ Configuration cleared");
     }

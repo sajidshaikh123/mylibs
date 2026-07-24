@@ -168,6 +168,24 @@ WiFiClient wifiClient;
 EthernetManager ethManager;
 
 Preferences wifiPref;
+
+// Set to true by wifiApplyCredentials() to restart the WiFi init state machine
+static volatile bool _wifiReconnectRequested = false;
+
+// Save new WiFi credentials to NVS and trigger a reconnect in boardloop.
+// Safe to call from any context (loop, callback, etc.).
+inline void wifiApplyCredentials(const String& ssid, const String& password) {
+    { Preferences p;
+      p.begin("wifi", false);
+      p.putBool("enabled",  true);
+      p.putBool("dhcp",     true);
+      p.putString("ssid",     ssid);
+      p.putString("password", password);
+      p.end(); }
+    wifiEnabled = true;
+    _wifiReconnectRequested = true;
+    Serial.printf("[WiFi] Credentials updated — SSID: %s — reconnecting...\n", ssid.c_str());
+}
 Preferences ethernetPref;
 // Declare MQTT preferences
 Preferences mqttPref;
@@ -194,9 +212,10 @@ PCF8574_Input inputExpander = PCF8574_Input(INPUT_ADDR, SCL_PIN, SDA_PIN, INPUT_
 
 extern void IRAM_ATTR inputISR();
 
-WebServer syncServer(80);
-
 std::function<void(char*, uint8_t*, unsigned int)> mqtt_callback = nullptr;
+std::function<void()> wifi_connected_callback = nullptr;
+
+void set_wifi_connected_callback(std::function<void()> cb) { wifi_connected_callback = cb; }
 
 
 
@@ -248,14 +267,7 @@ void mqtt_setcallback(std::function<void(char*, uint8_t*, unsigned int)> callbac
     mqtt_callback = callback;
 }
 
-void setupSyncWebServer() {
-    syncServer.on("/", HTTP_GET, []() {
-        syncServer.send(200, "text/html", "<h1>Ethernet Web Server Working!</h1>");
-    });
-    
-    syncServer.begin();
-    Serial.println("[Sync Web] Server started");
-}
+
 
 // Add this function to check PSRAM status
 void printPSRAMInfo() {
@@ -441,7 +453,7 @@ void publishPeripheralStatus() {
 void boardinit(){
 
     Serial.begin(115200);
-    Serial.setTimeout(300);
+    Serial.setTimeout(50);
     Serial.println("IIOT Gateway Board");
     settingsPref.begin("settings", true); 
 
@@ -519,6 +531,16 @@ void boardinit(){
     printPSRAMInfo();
     printPartitionTable();
 
+    if(rtc.begin()){
+        Serial.println("External RTC found and initialized.");
+    } else {
+        Serial.println("External RTC not found. Using internal RTC.");
+    }
+    yield();
+
+    
+
+
     
     // Initialize TCP Modbus preferences
     tcpModbusPref.begin("tcpmodbus", true);
@@ -534,12 +556,29 @@ void boardinit(){
         HMI.begin(115200, SERIAL_8N1, DWIN_RX_PIN, DWIN_TX_PIN);
         delay(100);
         Serial.println("HMI Serial begun at 115200 baud.");
+
+        
+        Serial.println("HMI initialized successfully (reset skipped).");
+
+        // Sync RTC time to HMI display
+        HMI.Time_Stamp(
+            rtc.getDay(),
+            rtc.getMonth(),
+            (uint8_t)(rtc.getYear() % 100),  // 2-digit year
+            rtc.getHour(),
+            rtc.getMinute(),
+            rtc.getSecond()
+        );
+        Serial.printf("[HMI] RTC time synced: %02d/%02d/%02d %02d:%02d:%02d\n",
+            rtc.getDay(), rtc.getMonth(), (uint8_t)(rtc.getYear() % 100),
+            rtc.getHour(), rtc.getMinute(), rtc.getSecond());
+
+        delay(100);
         yield();
         HMI.reset();  // Commented out - reset manually after full boot if needed
         delay(100);
         yield();
         
-        Serial.println("HMI initialized successfully (reset skipped).");
     } else {
         Serial.println("HMI disabled in preferences.");
     }
@@ -561,13 +600,7 @@ void boardinit(){
     }
     yield();
 
-    if(rtc.begin()){
-        Serial.println("External RTC found and initialized.");
-    } else {
-        Serial.println("External RTC not found. Using internal RTC.");
-    }
-    yield();
-
+    
     // ethManager = EthernetManager();
     // ethManager.begin();
 
@@ -681,6 +714,12 @@ void boardinit(){
         String mqttPassword = mqttPref.getString("password", "");
         mqttTransport = mqttPref.getString("transport", "auto");
         yield();
+        // Reduce WiFiClient TCP connect timeout from the 3-second ESP32 default to 1 second.
+        // PubSubClient::setSocketTimeout() only controls the MQTT protocol read timeout
+        // (waiting for CONNACK) — it does NOT affect the TCP connect() call.
+        // Without this, every failed MQTT connect attempt blocks the main loop for ~3 s.
+        wifiClient.setTimeout(1);
+
         if(mqttTransport == "wifi"){
             mqtt_obj.config((const char *)mqttServer.c_str(), (int)mqttPort, (const char *)mqttUsername.c_str(), (const char *)mqttPassword.c_str(), "disconnected", wifiClient);
         }else if(mqttTransport == "ethernet"){
@@ -734,6 +773,16 @@ void boardinit(){
     // Don't start web servers here - start them after network is ready
     // setupWebServer(); 
     // setupSyncWebServer();
+
+    // Sync RTC time to HMI display
+    HMI.Time_Stamp(
+        rtc.getDay(),
+        rtc.getMonth(),
+        (uint8_t)(rtc.getYear() % 100),  // 2-digit year
+        rtc.getHour(),
+        rtc.getMinute(),
+        rtc.getSecond()
+    );
     
     Serial.println("Board initialization complete!");
     yield();
@@ -746,11 +795,18 @@ void boardloop(){
 
     static unsigned long boardloop_count = 0;
     static unsigned long last_boardloop_print = 0;
-    static bool syncServerStarted = false;
     // WiFi init state machine: 0=pending, 1=mode_set, 2=get_mac, 3=disconnect, 4=connect, 5=done
     static uint8_t wifi_init_state = 0;
     static unsigned long wifi_init_timer = 0;
     boardloop_count++;
+
+    // External reconnect request (e.g. from wifiApplyCredentials)
+    if (_wifiReconnectRequested) {
+        _wifiReconnectRequested = false;
+        wifi_connected = false;
+        WiFi.disconnect(false);  // keep radio on — avoids 3+ second radio shutdown
+        wifi_init_state = 0;     // restart init state machine with new credentials
+    }
     
     
     unsigned long boardloop_start = millis();
@@ -760,9 +816,6 @@ void boardloop(){
     // if (ethManager.spiMutex) xSemaphoreTake(ethManager.spiMutex, portMAX_DELAY);
 
 
-    if(syncServerStarted) {
-        syncServer.handleClient();
-    }
     if(ethWebServerStarted) {
         handleEthWeb();
     }
@@ -775,6 +828,7 @@ void boardloop(){
             case 0: // Set WiFi mode
                 Serial.println("\n[WiFi] Starting deferred WiFi initialization...");
                 WiFi.mode(WIFI_STA);
+                WiFi.setSleep(false);  // Disable modem sleep — prevents 100-400ms ping latency
                 wifi_init_timer = millis();
                 wifi_init_state = 1;
                 break;
@@ -920,11 +974,7 @@ void boardloop(){
     
     // Web server handling - only use sync server for Ethernet
     if(ethernetEnabled){  // Use cached value instead of reading from NVS
-        if(ethManager.status() == 1 && !syncServerStarted) {
-            syncServerStarted = true;
-            setupSyncWebServer();
-            Serial.println("[Web] Sync server started for Ethernet");
-        }
+        // Ethernet HTTP is handled by handleEthWebClients() in web_configuration.h
     }
     
     
@@ -974,6 +1024,10 @@ void boardloop(){
         }else{
             toggleLED(0);
         }
+        // Release heap held by disconnected WebSocket clients every second.
+        // Omitting this call causes every browser tab/reload to permanently
+        // consume heap until the device crashes with OOM inside AsyncTCP.
+        if(webServerStarted) ws.cleanupClients();
         yield(); // Feed watchdog after LED toggle
     }
     yield(); // Feed after onesecloop
@@ -988,8 +1042,14 @@ void boardloop(){
             execution_timer = millis();
             if(mqttEnabled){
                 static bool prev_mqtt_connected = false;
-                if(mqttTransport == "wifi" || mqttTransport == "auto"){ // auto or ethernet
-                    
+                if(mqttTransport == "wifi" || mqttTransport == "auto"){ // wifi or auto
+                    // For "wifi" transport, only proceed when WiFi link is actually up.
+                    // Prevents repeated TCP connect attempts (blocking ~1 s each) when WiFi
+                    // is down but Ethernet or a stale wifi_connected flag passes the outer guard.
+                    if (mqttTransport == "wifi" && WiFi.status() != WL_CONNECTED) {
+                        mqtt_connected = false;
+                        prev_mqtt_connected = false;  // re-arm "just connected" event for next connect
+                    } else {
                     mqtt_obj.loop();
                     mqtt_connected = (mqtt_obj.connectionStatus() == MQTT_CONNECTED);
                     // Publish peripheral status on fresh MQTT connection
@@ -1008,6 +1068,7 @@ void boardloop(){
                         mqtt_obj.publish(mqtt_obj.getTopic("status").c_str() , buffer) ;
                     }
                     prev_mqtt_connected = mqtt_connected;
+                    } // end WiFi-status guard
                 }else if(mqttTransport == "ethernet"){
                     // With Ethernet transport, only loop MQTT if Ethernet is connected
                     if (conn_status == 1) {
@@ -1048,16 +1109,18 @@ void boardloop(){
                 if(wifi_connected == false){
                     wifi_connected = true;
 
-                      
+                    // Re-apply no-sleep every time the link comes up.
+                    // WiFi.begin() can re-enable modem sleep internally.
+                    WiFi.setSleep(false);
+                    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+
                     Serial.println("[WiFi] ✓ Connected successfully!");
                     Serial.print("[WiFi] IP Address: ");
                     Serial.println(WiFi.localIP());
 
-                    setupWebServer(); 
-                    setupSyncWebServer();
-                    syncServerStarted = true;
-                    // setupSyncWebServer();
-                    Serial.println("[Web] Sync server started for WiFi");
+                    setupWebServer();
+                    Serial.println("[Web] Async web server started for WiFi");
+                    if (wifi_connected_callback) wifi_connected_callback();
 
                     if(mqttEnabled){
                         if(mqttTransport == "wifi" || mqttTransport == "auto"){
@@ -1081,7 +1144,74 @@ void boardloop(){
                         }
                     } 
                 }
+
+                // ── WiFi connectivity watchdog ─────────────────────────────────
+                // Ping the gateway every 60 s in a background FreeRTOS task so
+                // the main loop is never blocked by the ~1 s ICMP timeout.
+                static unsigned long    wifi_ping_timer    = 0;
+                static uint8_t          wifi_ping_failures = 0;
+                static volatile int8_t  _pingResult        = -1;  // -1=idle 0=fail 1=ok
+                static TaskHandle_t     _pingTaskHandle    = NULL;
+                static IPAddress        _pingGW;
+
+                // Launch ping task when interval expires and no task is running.
+                // After a failure, retry every 10 s instead of 60 s so we
+                // detect recovery quickly without waiting a full minute.
+                unsigned long _pingInterval = (wifi_ping_failures > 0) ? 10000UL : 60000UL;
+                if (millis() - wifi_ping_timer >= _pingInterval &&
+                    _pingResult == -1 && _pingTaskHandle == NULL)
+                {
+                    wifi_ping_timer = millis();
+                    IPAddress gw = WiFi.gatewayIP();
+                    if (gw[0] != 0) {
+                        _pingGW = gw;
+                        xTaskCreate([](void*) {
+                            bool ok = Ping.ping(_pingGW, 1);
+                            _pingResult = ok ? 1 : 0;
+                            _pingTaskHandle = NULL;
+                            vTaskDelete(NULL);
+                        }, "wifi_ping", 4096, NULL, 1, &_pingTaskHandle);
+                    }
+                }
+
+                // Consume result when the background task has finished.
+                if (_pingResult >= 0) {
+                    bool pingOk = (_pingResult == 1);
+                    _pingResult = -1;
+
+                    if (pingOk) {
+                        if (wifi_ping_failures > 0)
+                            Serial.println("[WiFi] Gateway ping OK — connection healthy");
+                        wifi_ping_failures = 0;
+                    } else {
+                        wifi_ping_failures++;
+                        Serial.printf("[WiFi] \u26a0 Gateway ping failed (%u/3) \u2014 IP:%s GW:%s\n",
+                            wifi_ping_failures,
+                            WiFi.localIP().toString().c_str(),
+                            WiFi.gatewayIP().toString().c_str());
+                        if (wifi_ping_failures >= 3) {
+                            Serial.println("[WiFi] \u26a0 Gateway unreachable \u2014 forcing WiFi reconnect...");
+                            wifi_ping_failures = 0;
+                            wifi_ping_timer    = millis(); // wait full interval before next ping
+                            wifi_connected     = false;
+                            WiFi.disconnect(false);        // deassociate only — keep radio on
+                            wifi_init_state    = 3;        // skip mode/MAC delays, go straight to connect
+                            // wifi_init_timer intentionally not reset: state 3 checks
+                            // (millis() - wifi_init_timer >= 500); the old stale value
+                            // guarantees the connect fires on the very next loop iteration.
+                        }
+                    }
+                }
+                // ──────────────────────────────────────────────────────────────
+
             }else{
+                if (wifi_connected) {
+                    // WiFi just dropped — schedule an automatic reconnect.
+                    Serial.println("[WiFi] \u2718 Disconnected \u2014 scheduling reconnect...");
+                    WiFi.disconnect(false);  // ensure radio is cleanly reset before reconnect
+                    wifi_init_timer = 0;     // makes state 3 fire immediately on next boardloop()
+                    wifi_init_state = 3;
+                }
                 wifi_connected = false;
             }
             if(millis() - execution_timer > 500){
@@ -1098,7 +1228,7 @@ void boardloop(){
     
     // Only print completion for iterations that take unusually long
     unsigned long boardloop_time = millis() - boardloop_start;
-    if (boardloop_time > 50) {
+    if (boardloop_time > 500) {
         Serial.printf("[BOARDLOOP] #%lu took %lu ms\n", boardloop_count, boardloop_time);
     }
 }

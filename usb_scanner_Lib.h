@@ -26,6 +26,7 @@ QueueHandle_t hid_host_event_queue;
 bool user_shutdown = false;
 
 uint8_t barcode_status = 0; // 0: not ready, 1: ready
+volatile uint8_t usb_status_event = 0; // 0: no event, 1: connected, 2: disconnected
 
 /**
  * @brief HID Host event
@@ -438,6 +439,7 @@ void hid_host_interface_callback(hid_host_device_handle_t hid_device_handle,
     ESP_ERROR_CHECK(hid_host_device_close(hid_device_handle));
     // Serial.println(" DISCONNECTED");
     barcode_status = 0;
+    usb_status_event = 2; // signal disconnected
     break;
   case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
     ESP_LOGI(TAG, "HID Device, protocol '%s' TRANSFER_ERROR",
@@ -469,12 +471,23 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
   case HID_HOST_DRIVER_EVENT_CONNECTED:
     ESP_LOGI(TAG, "HID Device, protocol '%s' CONNECTED",
              hid_proto_name_str[dev_params.proto]);
-      // Serial.print("HID Device, protocol ");
-      // Serial.print(hid_proto_name_str[dev_params.proto]);
-      // Serial.println(" CONNECTED");
-      barcode_status = 1;
+    barcode_status = 1;
+    usb_status_event = 1; // signal connected
 
-    ESP_ERROR_CHECK(hid_host_device_open(hid_device_handle, &dev_config));
+    {
+      esp_err_t open_err = hid_host_device_open(hid_device_handle, &dev_config);
+      if (open_err == ESP_ERR_INVALID_STATE) {
+        // Device still open from a previous connection (disconnect was not handled cleanly).
+        // Close the stale handle first, then retry.
+        ESP_LOGW(TAG, "hid_host_device_open: INVALID_STATE — closing stale handle and retrying");
+        hid_host_device_close(hid_device_handle);
+        open_err = hid_host_device_open(hid_device_handle, &dev_config);
+      }
+      if (open_err != ESP_OK) {
+        ESP_LOGE(TAG, "hid_host_device_open failed: %s — skipping device", esp_err_to_name(open_err));
+        break;
+      }
+    }
     if (HID_SUBCLASS_BOOT_INTERFACE == dev_params.sub_class) {
       ESP_ERROR_CHECK(hid_class_request_set_protocol(hid_device_handle,
                                                      HID_REPORT_PROTOCOL_BOOT));
@@ -484,12 +497,6 @@ void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
     }
     ESP_ERROR_CHECK(hid_host_device_start(hid_device_handle));
     break;
-  // case HID_HOST_DRIVER_EVENT_DISCONNECTED:
-  //   ESP_LOGI(TAG, "HID Device, protocol '%s' DISCONNECTED",
-  //            hid_proto_name_str[dev_params.proto]);
-  //   Serial.printf("HID Device, protocol '%s' DISCONNECTED", hid_proto_name_str[dev_params.proto]);
-  //   ESP_ERROR_CHECK(hid_host_device_close(hid_device_handle));
-  //   break;
   case ESP_ERR_INVALID_STATE:
     ESP_LOGI(TAG, "HID Device, protocol '%s' INVALID_STATE",
              hid_proto_name_str[dev_params.proto]);

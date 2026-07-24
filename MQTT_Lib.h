@@ -40,8 +40,6 @@ public:
     String getMacTopic(String request);
 
 private:
-    static void     _connectTaskFn(void *pvParameters); // FreeRTOS task: runs connect() off the main loop
-
     String cached_company ="";
     String cached_location ="";
     String cached_department ="";
@@ -57,8 +55,6 @@ private:
     unsigned long loop_timer = 0; // Timer for loop execution interval
     uint8_t counter = 0; // Connection attempt counter
     bool update_success_flag = false; // Flag for tracking MQTT connection status
-    TaskHandle_t    _connectTaskHandle = NULL;
-    volatile bool   _connecting        = false;
 };
 
 #endif

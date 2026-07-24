@@ -99,9 +99,11 @@ void MQTT_Lib::config(const char *ip, uint16_t port, const char *user, const cha
     
     PubSubClient::setClient(client);
     PubSubClient::setServer(mqttIP, port); // Convert port from string to integer
-    PubSubClient::setBufferSize(32000); // Reduced buffer size to prevent heap corruption (was 32000)
+    PubSubClient::setBufferSize(4096);  // 4 KB is sufficient for part-traceability payloads.
+                                          // The previous value of 32000 permanently consumed 32 KB of heap,
+                                          // leaving too little for AsyncWebServer HTTP request allocation → OOM crash.
     PubSubClient::setKeepAlive(5); // Keep-alive interval for connection (increased for stability)
-    PubSubClient::setSocketTimeout(1); // Socket timeout in seconds (increased for reliability)
+    PubSubClient::setSocketTimeout(2); // 2 s timeout — short enough to not block the main loop excessively
   
     
     mqtt_user = String(user);
@@ -192,19 +194,11 @@ String MQTT_Lib::getMacTopic(String request){
     return temp_topic;
 }
 
-
-// FreeRTOS background task: runs connect() so the main loop never blocks.
-// Deletes itself when done (one-shot per attempt).
-void MQTT_Lib::_connectTaskFn(void *pvParameters) {
-    MQTT_Lib *self = static_cast<MQTT_Lib*>(pvParameters);
-    Serial.println("connecting to MQTT");
-    self->connect();
-    self->_connecting        = false;
-    self->_connectTaskHandle = NULL;
-    vTaskDelete(NULL);
-}
-
 // Handle MQTT loop operations with a 50ms interval
+// NOTE: connect() is called synchronously here — do NOT move it to a FreeRTOS
+// background task. The WiFiClient used by PubSubClient is not thread-safe;
+// running it concurrently with other network tasks (e.g. the wifi_ping task)
+// corrupts the lwIP state and breaks both MQTT and ICMP ping.
 void MQTT_Lib::loop() {
     if ((millis() - loop_timer) >= MQTT_LOOP_INTERVAL) {
         loop_timer = millis();
@@ -212,13 +206,18 @@ void MQTT_Lib::loop() {
             PubSubClient::loop();  // Maintain MQTT connection and handle incoming messages
             mqtt_timer = millis();
         } else {
-            // If disconnected, spawn a background task to reconnect so connect()
-            // doesn't block the main loop for ~3 s on each failed attempt.
-            if (!_connecting && (millis() - mqtt_timer) > MQTT_RECONNECT_INTERVAL) {
-                mqtt_timer  = millis();
-                _connecting = true;
-                xTaskCreate(_connectTaskFn, "mqtt_conn", 4096, this, 1,
-                            &_connectTaskHandle);
+            // If disconnected, attempt reconnect when interval expires.
+            // Blocks for at most setSocketTimeout(2) seconds on failure.
+            if ((millis() - mqtt_timer) > MQTT_RECONNECT_INTERVAL) {
+                mqtt_timer = millis();
+                // Guard: skip connect if heap is too low to safely open a TCP socket.
+                // A failed socket allocation can corrupt the lwIP state or trigger abort().
+                if (ESP.getFreeHeap() < 20000) {
+                    Serial.printf("[MQTT] Low heap (%u B), skipping connect\n", ESP.getFreeHeap());
+                } else {
+                    Serial.println("connecting to MQTT");
+                    connect();
+                }
             }
         }
     }

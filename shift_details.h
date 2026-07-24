@@ -188,6 +188,44 @@ const char* shiftGetName(uint8_t n) {
     return _shifts[n - 1].name;
 }
 
+// ── Internal: parse "HH:MM" string to minutes since midnight ─────────────────
+static uint16_t _shiftTimeToMin(const char* t) {
+    if (!t || t[0] == '\0') return 0;
+    uint16_t h = (uint8_t)(t[0] - '0') * 10 + (uint8_t)(t[1] - '0');
+    uint16_t m = (uint8_t)(t[3] - '0') * 10 + (uint8_t)(t[4] - '0');
+    return h * 60 + m;
+}
+
+// ── Get current shift number (1-based) from RTC system time ──────────────────
+// Returns 0 if time is unavailable or current time is not within any shift.
+uint8_t getCurrentShiftNumber() {
+    if (!shiftEnabled || shiftNumShifts == 0) return 0;
+    struct tm ti;
+    if (!getLocalTime(&ti)) return 0;   // RTC / NTP not synced yet
+    uint16_t nowMin = (uint16_t)ti.tm_hour * 60 + (uint16_t)ti.tm_min;
+    for (uint8_t i = 0; i < shiftNumShifts; i++) {
+        uint16_t sMin = _shiftTimeToMin(_shifts[i].start);
+        uint16_t eMin = _shiftTimeToMin(_shifts[i].end);
+        bool inShift;
+        if (sMin <= eMin) {
+            // Normal (same-day) shift: e.g. 06:00 – 14:00
+            inShift = (nowMin >= sMin && nowMin < eMin);
+        } else {
+            // Overnight shift: e.g. 22:00 – 06:00
+            inShift = (nowMin >= sMin || nowMin < eMin);
+        }
+        if (inShift) return i + 1;   // 1-based
+    }
+    return 0;   // not in any defined shift
+}
+
+// ── Get current shift name ────────────────────────────────────────────────────
+// Returns "" if unavailable or outside all shifts.
+const char* getCurrentShiftName() {
+    uint8_t n = getCurrentShiftNumber();
+    return shiftGetName(n);   // shiftGetName(0) already returns ""
+}
+
 // ── Serialise all shifts to JSON string ───────────────────────────────────────
 String shiftDetailsToJson() {
     DynamicJsonDocument doc(1536);
@@ -267,5 +305,6 @@ bool shiftDetailsFromJson(const String& body) {
     if (changed) shiftDetailsSave();
     return changed;
 }
+
 
 #endif // SHIFT_DETAILS_H

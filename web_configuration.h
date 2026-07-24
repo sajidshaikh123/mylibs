@@ -9,6 +9,7 @@
 #include <ArduinoJson.h>
 #include <Preferences.h>
 #include <Update.h>
+#include <functional>
 #include "RTCManager.h"
 #include "FilesystemManager.h"
 #include "MQTT_Lib.h"
@@ -68,6 +69,13 @@ String getNetworkStatusJSON();
 void setupEthWebServer();
 void handleEthWebClients();
 void handleEthWeb();
+
+// Optional extra Ethernet route handler — registered by application code AFTER all
+// app headers are included (e.g. from traceabilityWebConfigInit). The handler
+// receives the EthernetClient by reference plus the parsed method/path/query/body
+// strings. It must return true if it handled the request, false to fall through to 404.
+using EthExtraRouteHandler = std::function<bool(EthernetClient&, const String&, const String&, const String&, const String&)>;
+EthExtraRouteHandler _ethExtraRouteHandler = nullptr;
 
 // Helper function to get Ethernet MAC as String
 String getEthernetMACString() {
@@ -627,8 +635,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <input type="text" id="wifiSsid" placeholder="Enter WiFi SSID">
                     </div>
                     <div class="form-group">
+                        <label>Security</label>
+                        <select id="wifiSecurity" onchange="toggleWiFiPassword()" style="width:100%;padding:8px 10px;border:1px solid #ddd;border-radius:4px;font-size:14px;">
+                            <option value="wpa">WPA/WPA2-PSK</option>
+                            <option value="none">None (Open)</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="wifiPasswordGroup">
                         <label>Password</label>
-                        <input type="password" id="wifiPassword" placeholder="Enter WiFi password">
+                        <input type="password" id="wifiPassword" placeholder="Min 8 characters">
                     </div>
                     <div class="form-group">
                         <label>DHCP Mode</label>
@@ -935,7 +950,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                             <option value="38400">38400</option>
                             <option value="57600">57600</option>
                             <option value="115200">115200</option>
-                            <option value="230400">230400</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -1025,6 +1039,20 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                     <p style="color: #888; font-size: 13px; margin-top: 10px;">&#9888;&#65039; Changes take effect after reboot.</p>
                     <button class="btn btn-primary" onclick="saveIOConfig()">&#128190; Save IO Config</button>
+                </div>
+
+                <!-- IO Pin Status card — shown when IO tab is visible -->
+                <div class="card" id="ioPinStatusCard" style="display:none">
+                    <h3>&#128268; IO Pin Status</h3>
+                    <div id="io_in_status_wrap">
+                        <p style="font-weight:600;font-size:13px;margin-bottom:8px">Input Expander (PCF8574)</p>
+                        <div id="io_in_pins" style="display:grid;grid-template-columns:repeat(8,1fr);gap:6px;margin-bottom:16px"></div>
+                    </div>
+                    <div id="io_out_status_wrap">
+                        <p style="font-weight:600;font-size:13px;margin-bottom:8px">Output Expander (PCF8574)</p>
+                        <div id="io_out_pins" style="display:grid;grid-template-columns:repeat(8,1fr);gap:6px"></div>
+                    </div>
+                    <p style="color:#888;font-size:12px;margin-top:10px">&#128337; Refreshes every 500 ms &mdash; green = input active (LOW) &nbsp;/&nbsp; blue = output asserted (HIGH)</p>
                 </div>
             </div>
 
@@ -1295,6 +1323,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (tabName === 'files')   { refreshFileList(); }
             if (tabName === 'network') { loadNetworkStatus(); }
             if (tabName === 'mqtt')    { loadMqttStatus(); }
+            if (tabName === 'io')      { startIoPinPolling(); }
         }
         
         function showAlert(message, type = 'success') {
@@ -1316,6 +1345,10 @@ const char index_html[] PROGMEM = R"rawliteral(
         function toggleWiFiStaticIP() {
             const dhcp = document.getElementById('wifiDhcp').checked;
             document.getElementById('wifiStaticIpFields').style.display = dhcp ? 'none' : 'block';
+        }
+        function toggleWiFiPassword() {
+            const sec = document.getElementById('wifiSecurity').value;
+            document.getElementById('wifiPasswordGroup').style.display = sec === 'wpa' ? 'block' : 'none';
         }
 
         function isValidIP(ip) {
@@ -1383,8 +1416,21 @@ const char index_html[] PROGMEM = R"rawliteral(
         }
         
         function saveWiFiConfig() {
+            const enabled = document.getElementById('wifiEnabled').checked;
             const dhcp = document.getElementById('wifiDhcp').checked;
-            if (!dhcp) {
+            const security = document.getElementById('wifiSecurity').value;
+            const password = document.getElementById('wifiPassword').value;
+            // Only validate connection fields when WiFi is being enabled
+            if (enabled) {
+                if (security === 'wpa') {
+                    if (!password || password.length < 8) {
+                        showAlert('Password is required and must be at least 8 characters for WPA/WPA2-PSK.', 'error');
+                        document.getElementById('wifiPassword').focus();
+                        return;
+                    }
+                }
+            }
+            if (enabled && !dhcp) {
                 const fields = [
                     { id: 'wifiIp', label: 'IP Address' },
                     { id: 'wifiGateway', label: 'Gateway' },
@@ -1403,7 +1449,8 @@ const char index_html[] PROGMEM = R"rawliteral(
             const data = {
                 enabled: document.getElementById('wifiEnabled').checked,
                 ssid: document.getElementById('wifiSsid').value,
-                password: document.getElementById('wifiPassword').value,
+                security: security,
+                password: security === 'wpa' ? password : '',
                 dhcp: dhcp,
                 ip:      dhcp ? '' : document.getElementById('wifiIp').value.trim(),
                 gateway: dhcp ? '' : document.getElementById('wifiGateway').value.trim(),
@@ -1784,6 +1831,46 @@ const char index_html[] PROGMEM = R"rawliteral(
             apiCall('/api/io/config', 'POST', data);
         }
 
+        let _ioPollTimer = null;
+        function startIoPinPolling() {
+            if (_ioPollTimer) return;  // already running
+            _ioPollTimer = setInterval(loadIoPinStatus, 500);
+            loadIoPinStatus();
+        }
+        function loadIoPinStatus() {
+            fetch('/api/io/pin_status')
+                .then(r => r.json())
+                .then(d => {
+                    var card = document.getElementById('ioPinStatusCard');
+                    if (!d.input_enabled && !d.output_enabled) { card.style.display='none'; return; }
+                    card.style.display = 'block';
+                    var inWrap  = document.getElementById('io_in_status_wrap');
+                    var outWrap = document.getElementById('io_out_status_wrap');
+                    inWrap.style.display  = d.input_enabled  ? 'block' : 'none';
+                    outWrap.style.display = d.output_enabled ? 'block' : 'none';
+                    if (d.input_enabled) {
+                        var html = '';
+                        for (var i = 0; i < 8; i++) {
+                            var active = !!(d.input_bits & (1 << (7 - i)));
+                            html += '<div style="text-align:center;padding:6px 4px;border-radius:7px;border:1px solid ' + (active ? '#86efac' : '#e2e8f0') + ';background:' + (active ? '#f0fdf4' : '#f8fafc') + '">'
+                                  + '<div style="width:10px;height:10px;border-radius:50%;background:' + (active ? '#22c55e' : '#94a3b8') + ';margin:0 auto 4px"></div>'
+                                  + '<span style="font-size:11px;color:#334155">IN ' + i + '</span></div>';
+                        }
+                        document.getElementById('io_in_pins').innerHTML = html;
+                    }
+                    if (d.output_enabled) {
+                        var html2 = '';
+                        for (var j = 0; j < 8; j++) {
+                            var on = !!(d.output_bits & (1 << j));
+                            html2 += '<div style="text-align:center;padding:6px 4px;border-radius:7px;border:1px solid ' + (on ? '#93c5fd' : '#e2e8f0') + ';background:' + (on ? '#eff6ff' : '#f8fafc') + '">'
+                                   + '<div style="width:10px;height:10px;border-radius:50%;background:' + (on ? '#3b82f6' : '#94a3b8') + ';margin:0 auto 4px"></div>'
+                                   + '<span style="font-size:11px;color:#334155">OUT ' + j + '</span></div>';
+                        }
+                        document.getElementById('io_out_pins').innerHTML = html2;
+                    }
+                }).catch(() => {});
+        }
+
         // File Management Functions
         let currentPath = '/';
         
@@ -2093,12 +2180,14 @@ const char index_html[] PROGMEM = R"rawliteral(
             if (wifiConfig.success) {
                 document.getElementById('wifiEnabled').checked = wifiConfig.enabled;
                 document.getElementById('wifiSsid').value = wifiConfig.ssid || '';
+                document.getElementById('wifiSecurity').value = wifiConfig.security || 'wpa';
                 document.getElementById('wifiDhcp').checked = wifiConfig.dhcp !== false;
                 document.getElementById('wifiIp').value = wifiConfig.ip || '';
                 document.getElementById('wifiGateway').value = wifiConfig.gateway || '';
                 document.getElementById('wifiSubnet').value = wifiConfig.subnet || '';
                 document.getElementById('wifiDns').value = wifiConfig.dns || '';
                 toggleWiFiStaticIP();
+                toggleWiFiPassword();
             }
             
             // Load Ethernet config
@@ -2300,7 +2389,7 @@ void addResetPartitionInfo(DynamicJsonDocument &doc) {
 void handleGetStatus(AsyncWebServerRequest *request) {
     if (!checkAuthentication(request)) return;
     
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(2048);
     doc["success"] = true;
     
     // System info
@@ -2387,13 +2476,14 @@ void handleWiFiConfig(AsyncWebServerRequest *request) {
         // Get WiFi config
         DynamicJsonDocument doc(512);
         doc["success"] = true;
-        doc["enabled"] = wifiPref.getBool("enabled", false);
-        doc["ssid"]    = wifiPref.getString("ssid", "");
-        doc["dhcp"]    = wifiPref.getBool("dhcp", true);
-        doc["ip"]      = wifiPref.getString("ip", "");
-        doc["gateway"] = wifiPref.getString("gateway", "");
-        doc["subnet"]  = wifiPref.getString("subnet", "");
-        doc["dns"]     = wifiPref.getString("dns", "");
+        doc["enabled"]  = wifiPref.getBool("enabled", false);
+        doc["ssid"]     = wifiPref.getString("ssid", "");
+        doc["security"] = wifiPref.getString("security", "wpa");
+        doc["dhcp"]     = wifiPref.getBool("dhcp", true);
+        doc["ip"]       = wifiPref.getString("ip", "");
+        doc["gateway"]  = wifiPref.getString("gateway", "");
+        doc["subnet"]   = wifiPref.getString("subnet", "");
+        doc["dns"]      = wifiPref.getString("dns", "");
         
         String response;
         serializeJson(doc, response);
@@ -2409,18 +2499,29 @@ void handleWiFiConfig(AsyncWebServerRequest *request) {
             request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
             return;
         }
+
+        // Server-side security + password validation
+        String security = doc.containsKey("security") ? doc["security"].as<String>() : "wpa";
+        if (security == "wpa") {
+            String pwd = doc.containsKey("password") ? doc["password"].as<String>() : "";
+            if (pwd.length() < 8) {
+                request->send(400, "application/json", "{\"success\":false,\"message\":\"Password must be at least 8 characters for WPA/WPA2-PSK\"}");
+                return;
+            }
+        }
         
         wifiPref.end();
         wifiPref.begin("wifi", false);
         
-        if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",   doc["enabled"]);
-        if (doc.containsKey("ssid"))     wifiPref.putString("ssid",    doc["ssid"].as<String>());
-        if (doc.containsKey("password")) wifiPref.putString("password", doc["password"].as<String>());
-        if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",      doc["dhcp"]);
-        if (doc.containsKey("ip"))       wifiPref.putString("ip",       doc["ip"].as<String>());
-        if (doc.containsKey("gateway"))  wifiPref.putString("gateway",  doc["gateway"].as<String>());
-        if (doc.containsKey("subnet"))   wifiPref.putString("subnet",   doc["subnet"].as<String>());
-        if (doc.containsKey("dns"))      wifiPref.putString("dns",      doc["dns"].as<String>());
+        if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",    doc["enabled"]);
+        if (doc.containsKey("ssid"))     wifiPref.putString("ssid",     doc["ssid"].as<String>());
+        if (doc.containsKey("security")) wifiPref.putString("security",  doc["security"].as<String>());
+        if (doc.containsKey("password")) wifiPref.putString("password",  doc["password"].as<String>());
+        if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",       doc["dhcp"]);
+        if (doc.containsKey("ip"))       wifiPref.putString("ip",        doc["ip"].as<String>());
+        if (doc.containsKey("gateway"))  wifiPref.putString("gateway",   doc["gateway"].as<String>());
+        if (doc.containsKey("subnet"))   wifiPref.putString("subnet",    doc["subnet"].as<String>());
+        if (doc.containsKey("dns"))      wifiPref.putString("dns",       doc["dns"].as<String>());
         
         wifiPref.end();
         wifiPref.begin("wifi", true);
@@ -2692,7 +2793,6 @@ void handleSerialPortConfig(AsyncWebServerRequest *request) {
             request->send(400, "application/json", "{\"success\":false,\"message\":\"Invalid JSON\"}");
             return;
         }
-
         serialportPref.begin(SERIALPORT_PREF_NS, false);
         if (doc.containsKey("enabled"))  serialportPref.putBool("enabled",   doc["enabled"]);
         if (doc.containsKey("baudrate")) serialportPref.putULong("baudrate",  doc["baudrate"].as<uint32_t>());
@@ -2868,7 +2968,7 @@ void onWebSocketEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsE
 
 
 String getSystemStatusJSON() {
-    DynamicJsonDocument doc(4096);
+    DynamicJsonDocument doc(1024);
     doc["type"] = "status";
     
     JsonObject system = doc.createNestedObject("system");
@@ -2916,8 +3016,11 @@ String getSystemStatusJSON() {
         }
         mqttSt["reason"] = mReason;
     }
-
-    addResetPartitionInfo(doc);
+    // NOTE: reset/partition info intentionally omitted from WebSocket push —
+    // it is static data that never changes at runtime. It is served only by
+    // the HTTP /api/status endpoint (handleGetStatus) to avoid the heavy
+    // DynamicJsonDocument + Preferences + partition-iterator allocations on
+    // every 5-second WebSocket broadcast.
 
     String output;
     serializeJson(doc, output);
@@ -3252,9 +3355,11 @@ void handleIOConfig(AsyncWebServerRequest *request) {
     if (request->method() == HTTP_GET) {
         DynamicJsonDocument doc(256);
         doc["success"] = true;
-        doc["input_enabled"]  = settingsPref.getBool("input_enabled",  false);
-        doc["output_enabled"] = settingsPref.getBool("output_enabled", false);
-        doc["usb_enabled"]    = settingsPref.getBool("usb_enabled",    false);
+        { Preferences p; p.begin("settings", true);
+          doc["input_enabled"]  = p.getBool("input_enabled",  false);
+          doc["output_enabled"] = p.getBool("output_enabled", false);
+          doc["usb_enabled"]    = p.getBool("usb_enabled",    false);
+          p.end(); }
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
@@ -3281,7 +3386,9 @@ void handleFilesystemConfig(AsyncWebServerRequest *request) {
     if (request->method() == HTTP_GET) {
         DynamicJsonDocument doc(256);
         doc["success"] = true;
-        doc["fs_enabled"] = settingsPref.getBool("fs_enabled", false);
+        { Preferences p; p.begin("settings", true);
+          doc["fs_enabled"] = p.getBool("fs_enabled", false);
+          p.end(); }
         String response;
         serializeJson(doc, response);
         request->send(200, "application/json", response);
@@ -3373,6 +3480,26 @@ void setupWebServer() {
     webServer.on("/api/files/download", HTTP_GET, handleFileDownload);
     webServer.on("/api/files/delete", HTTP_ANY, handleFileDelete);
     webServer.on("/api/io/config", HTTP_ANY, handleIOConfig, NULL, handleJsonBody);
+    // Forward references — defined in iotboard.h after this header is included
+    extern PCF8574_Input  inputExpander;
+    extern PCF8574_Output outputExpander;
+    webServer.on("/api/io/pin_status", HTTP_GET, [](AsyncWebServerRequest *request) {
+        bool inEn  = settingsPref.getBool("input_enabled",  false);
+        bool outEn = settingsPref.getBool("output_enabled", false);
+        StaticJsonDocument<128> doc;
+        doc["input_enabled"]  = inEn;
+        doc["output_enabled"] = outEn;
+        if (inEn) {
+            int16_t raw = inputExpander.readInputs();
+            doc["input_bits"] = (raw >= 0) ? (uint8_t)(~(uint8_t)raw) : 0;
+        }
+        if (outEn) {
+            int16_t raw = outputExpander.readOutputs();
+            doc["output_bits"] = (raw >= 0) ? (uint8_t)raw : 0;
+        }
+        String resp; serializeJson(doc, resp);
+        request->send(200, "application/json", resp);
+    });
     webServer.on("/api/filesystem/config", HTTP_ANY, handleFilesystemConfig, NULL, handleJsonBody);
     webServer.on("/api/filesystem/format", HTTP_POST, handleFilesystemFormat);
     webServer.on("/api/web/settings", HTTP_ANY, handleWebSettings, NULL, handleJsonBody);
@@ -3452,7 +3579,9 @@ void handleWebServer() {
         }
     }
     
-    // Note: cleanupClients() not available in this AsyncWebSocket version
+    // Release heap held by disconnected WebSocket clients.
+    // Without this, every disconnected browser tab permanently consumes heap.
+    ws.cleanupClients();
 }
 
 
@@ -3658,8 +3787,6 @@ void handleEthWebClients() {
         return;
     }
     
-    Serial.printf("[EthWeb] %s %s\n", method.c_str(), path.c_str());
-    
     // ==================== ROUTE HANDLING ====================
     
     // --- Serve main page ---
@@ -3716,14 +3843,15 @@ void handleEthWebClients() {
     // --- GET /api/wifi/config ---
     else if (path == "/api/wifi/config" && method == "GET") {
         DynamicJsonDocument doc(512);
-        doc["success"] = true;
-        doc["enabled"] = wifiPref.getBool("enabled", false);
-        doc["ssid"]    = wifiPref.getString("ssid", "");
-        doc["dhcp"]    = wifiPref.getBool("dhcp", true);
-        doc["ip"]      = wifiPref.getString("ip", "");
-        doc["gateway"] = wifiPref.getString("gateway", "");
-        doc["subnet"]  = wifiPref.getString("subnet", "");
-        doc["dns"]     = wifiPref.getString("dns", "");
+        doc["success"]  = true;
+        doc["enabled"]  = wifiPref.getBool("enabled", false);
+        doc["ssid"]     = wifiPref.getString("ssid", "");
+        doc["security"] = wifiPref.getString("security", "wpa");
+        doc["dhcp"]     = wifiPref.getBool("dhcp", true);
+        doc["ip"]       = wifiPref.getString("ip", "");
+        doc["gateway"]  = wifiPref.getString("gateway", "");
+        doc["subnet"]   = wifiPref.getString("subnet", "");
+        doc["dns"]      = wifiPref.getString("dns", "");
         
         String response;
         serializeJson(doc, response);
@@ -3737,16 +3865,26 @@ void handleEthWebClients() {
         if (error) {
             ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Invalid JSON\"}");
         } else {
+            // Server-side security + password validation
+            String security = doc.containsKey("security") ? doc["security"].as<String>() : "wpa";
+            if (security == "wpa") {
+                String pwd = doc.containsKey("password") ? doc["password"].as<String>() : "";
+                if (pwd.length() < 8) {
+                    ethSendJSON(client, 400, "{\"success\":false,\"message\":\"Password must be at least 8 characters for WPA/WPA2-PSK\"}");
+                    return;
+                }
+            }
             wifiPref.end();
             wifiPref.begin("wifi", false);
-            if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",   doc["enabled"]);
-            if (doc.containsKey("ssid"))     wifiPref.putString("ssid",    doc["ssid"].as<String>());
-            if (doc.containsKey("password")) wifiPref.putString("password", doc["password"].as<String>());
-            if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",      doc["dhcp"]);
-            if (doc.containsKey("ip"))       wifiPref.putString("ip",       doc["ip"].as<String>());
-            if (doc.containsKey("gateway"))  wifiPref.putString("gateway",  doc["gateway"].as<String>());
-            if (doc.containsKey("subnet"))   wifiPref.putString("subnet",   doc["subnet"].as<String>());
-            if (doc.containsKey("dns"))      wifiPref.putString("dns",      doc["dns"].as<String>());
+            if (doc.containsKey("enabled"))  wifiPref.putBool("enabled",    doc["enabled"]);
+            if (doc.containsKey("ssid"))     wifiPref.putString("ssid",     doc["ssid"].as<String>());
+            if (doc.containsKey("security")) wifiPref.putString("security",  doc["security"].as<String>());
+            if (doc.containsKey("password")) wifiPref.putString("password",  doc["password"].as<String>());
+            if (doc.containsKey("dhcp"))     wifiPref.putBool("dhcp",       doc["dhcp"]);
+            if (doc.containsKey("ip"))       wifiPref.putString("ip",        doc["ip"].as<String>());
+            if (doc.containsKey("gateway"))  wifiPref.putString("gateway",   doc["gateway"].as<String>());
+            if (doc.containsKey("subnet"))   wifiPref.putString("subnet",    doc["subnet"].as<String>());
+            if (doc.containsKey("dns"))      wifiPref.putString("dns",       doc["dns"].as<String>());
             wifiPref.end();
             wifiPref.begin("wifi", true);
             ethSendJSON(client, 200, "{\"success\":true,\"message\":\"WiFi config saved\"}");
@@ -4369,9 +4507,11 @@ void handleEthWebClients() {
     else if (path == "/api/io/config" && method == "GET") {
         DynamicJsonDocument doc(256);
         doc["success"] = true;
-        doc["input_enabled"]  = settingsPref.getBool("input_enabled",  false);
-        doc["output_enabled"] = settingsPref.getBool("output_enabled", false);
-        doc["usb_enabled"]    = settingsPref.getBool("usb_enabled",    false);
+        { Preferences p; p.begin("settings", true);
+          doc["input_enabled"]  = p.getBool("input_enabled",  false);
+          doc["output_enabled"] = p.getBool("output_enabled", false);
+          doc["usb_enabled"]    = p.getBool("usb_enabled",    false);
+          p.end(); }
         String resp; serializeJson(doc, resp);
         ethSendJSON(client, 200, resp);
     }
@@ -4394,7 +4534,9 @@ void handleEthWebClients() {
     else if (path == "/api/filesystem/config" && method == "GET") {
         DynamicJsonDocument doc(256);
         doc["success"]    = true;
-        doc["fs_enabled"] = settingsPref.getBool("fs_enabled", false);
+        { Preferences p; p.begin("settings", true);
+          doc["fs_enabled"] = p.getBool("fs_enabled", false);
+          p.end(); }
         String resp; serializeJson(doc, resp);
         ethSendJSON(client, 200, resp);
     }
@@ -4439,6 +4581,14 @@ void handleEthWebClients() {
             ethSendJSON(client, 200, "{\"success\":true,\"message\":\"Web settings saved\"}");
         }
     }
+    // --- Application-defined extra routes ---
+    // Registered via _ethExtraRouteHandler (set by traceabilityWebConfigInit or similar).
+    // This keeps web_configuration.h free of app-specific symbols that are defined
+    // in headers included AFTER this file.
+    else if (_ethExtraRouteHandler && _ethExtraRouteHandler(client, method, path, query, body)) {
+        // request was handled by the registered callback — nothing more to do
+    }
+
     // --- 404 Not Found ---
     else {
         ethSendJSON(client, 404, "{\"success\":false,\"message\":\"Not found\"}");
