@@ -1,0 +1,18 @@
+#include <Arduino.h>
+#line 1 "C:\\Users\\hinab\\OneDrive\\Documents\\Arduino\\libraries\\mylibs\\examples\\base_code\\base_code\\base_code.ino"
+#include "iotboard.h"
+
+bool inputEvent = false;
+
+void IRAM_ATTR inputISR() {
+    inputEvent = true;
+}
+
+void setup() {
+    boardinit();
+}
+
+void loop() {
+    boardloop();
+}
+
