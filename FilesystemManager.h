@@ -29,7 +29,7 @@ public:
     void displayFile(const String &path);
     String readFile(const String &path);
     bool writeFile(const String &path, const char *message);
-    void appendFile(const String &path, const char *message);
+    bool appendFile(const String &path, const char *message);
     bool renameFile(const String &path1, const String &path2);
     bool deleteFile(const String &path);
     bool deleteDir(const String &path);

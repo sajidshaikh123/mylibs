@@ -487,24 +487,26 @@ bool FilesystemManager::writeFile(const String &path, const char *message) {
     return ok;
 }
 
-void FilesystemManager::appendFile(const String &path, const char *message) {
+bool FilesystemManager::appendFile(const String &path, const char *message) {
     Serial.printf("Appending to file: %s\r\n", path.c_str());
     if (!isFilesystemMounted()) {
         Serial.println("Error: No filesystem mounted");
-        return;
+        return false;
     }
 
     File file = activeFS->open(path.c_str(), FILE_APPEND);
     if (!file) {
         Serial.println("- failed to open file for appending");
-        return;
+        return false;
     }
-    if (file.print(message)) {
+    bool ok = file.print(message);
+    if (ok) {
         Serial.println("- message appended");
     } else {
         Serial.println("- append failed");
     }
     file.close();
+    return ok;
 }
 
 bool FilesystemManager::renameFile(const String &path1, const String &path2) {
